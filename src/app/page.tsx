@@ -36,12 +36,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { processPrompt, ModelConfig } from './actions';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { LayoutDashboard, FlaskConical, Download, Settings, Key } from 'lucide-react';
+import { LayoutDashboard, FlaskConical, Download, Settings, Key, Info } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import * as XLSX from 'xlsx';
 
 function parseLikertScores(responseText: string): Record<string, number> {
   const scores: Record<string, number> = {};
@@ -276,34 +277,47 @@ export default function PromptPlatform() {
   const currentModelsCount = getModelsToRun().length;
   const comboCount = generateCombinations().length;
 
-  const downloadCSV = () => {
+  const downloadExcel = () => {
     if (results.length === 0) return;
 
-    // Headers
-    const headers = ['ID', 'Status', 'Model', ...variables, 'Prompt Sent', 'Response'];
-
-    // Rows
-    const csvRows = results.map(r => {
-      const row = [
-        r.id,
-        r.status,
-        r.modelId,
-        ...variables.map(v => r.combo[v] || ''),
-        `"${r.promptSent.replace(/"/g, '""')}"`, // escape quotes
-        `"${r.response.replace(/"/g, '""')}"`
-      ];
-      return row.join(',');
+    // Sheet 1: Raw Data
+    const rawData = results.map(r => {
+      const rowItem: any = {
+        ID: r.id,
+        Status: r.status,
+        Model: r.modelId,
+      };
+      variables.forEach(v => {
+        rowItem[v] = r.combo[v] || '';
+      });
+      rowItem['Prompt Sent'] = r.promptSent;
+      rowItem['Response'] = r.response;
+      return rowItem;
     });
+    const ws1 = XLSX.utils.json_to_sheet(rawData);
 
-    const csvContent = [headers.join(','), ...csvRows].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `prompt_results_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Sheet 2: Aggregated Metrics
+    const tableData = getTableData();
+    const aggRows = tableData.rows.map(row => {
+      const rowItem: any = {
+        Rolle: row.role,
+        Modell: row.modelId
+      };
+      tableData.columns.forEach(col => {
+        const cell = row.scores[col];
+        rowItem[col] = cell ? Number((cell.sum / cell.count).toFixed(2)) : null;
+      });
+      return rowItem;
+    });
+    const ws2 = XLSX.utils.json_to_sheet(aggRows);
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws1, "Raw Data");
+    if (aggRows.length > 0) {
+      XLSX.utils.book_append_sheet(wb, ws2, "Likert Aggregations");
+    }
+
+    XLSX.writeFile(wb, `prompt_results_${Date.now()}.xlsx`);
   };
 
   const getAggregatedData = () => {
@@ -433,7 +447,7 @@ export default function PromptPlatform() {
       </aside>
 
       <main className="flex-1 overflow-auto p-4 md:p-8">
-        <div className="max-w-[1400px] mx-auto space-y-8">
+        <div className="w-full max-w-[1600px] mx-auto space-y-8">
 
           {activeTab === 'settings' && (
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -480,7 +494,7 @@ export default function PromptPlatform() {
           {activeTab === 'generator' && (
             <div className="w-full pb-16">
               <Tabs defaultValue="prompts" className="w-full">
-                <TabsList className="mb-8 grid w-full grid-cols-3 h-auto p-1 bg-card border shadow-sm rounded-lg">
+                <TabsList className="mb-8 grid w-full grid-cols-3">
                   <TabsTrigger value="prompts" className="py-3 text-base">1. Prompts</TabsTrigger>
                   <TabsTrigger value="variables" className="py-3 text-base">2. Variablen</TabsTrigger>
                   <TabsTrigger value="generate" className="py-3 text-base">3. Start & Vorschau</TabsTrigger>
@@ -577,12 +591,12 @@ export default function PromptPlatform() {
                         </CardHeader>
                         <CardContent className="pt-6">
                           <Tabs defaultValue={activeRoles[0]} className="w-full">
-                            <TabsList className="mb-6 w-full flex-wrap justify-start h-auto bg-transparent gap-2">
+                            <TabsList className="mb-8 w-full flex flex-wrap justify-start h-auto bg-transparent gap-3 p-0">
                               {activeRoles.map(role => (
                                 <TabsTrigger
                                   key={role}
                                   value={role}
-                                  className="border bg-card data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:border-primary py-2 px-4 whitespace-normal text-left h-auto"
+                                  className="border bg-card data-[state=active]:bg-[#006f45] data-[state=active]:text-white py-2 px-6 h-auto min-h-[44px] text-sm font-medium transition-colors"
                                 >
                                   {role.includes('(') ? role.split('(')[0].trim() : role}
                                 </TabsTrigger>
@@ -593,10 +607,15 @@ export default function PromptPlatform() {
                               const roleVars = roleVariables[role] || {};
                               return (
                                 <TabsContent key={role} value={role} className="space-y-6 animate-in fade-in">
-                                  <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 mb-6 flex gap-3">
-                                    <div className="flex-1 space-y-1">
-                                      <Label className="text-base font-semibold">Festgeschriebene Zusatz-Eigenschaften & Besonderheiten für diese Rolle</Label>
-                                      <p className="text-sm text-muted-foreground">Diese Variable ist besonders! Nutze sie für Dinge wie &quot;3 Jahre Arbeitserfahrung&quot;, die fest zu dieser speziellen Persona gehören (Variable: <span className="font-mono text-xs">{'{{Avatar_Eigenschaften_und_Praeferenzen}}'}</span>).</p>
+                                  <div className="bg-primary/5 p-5 rounded-lg border border-primary/20 mb-6 flex flex-col md:flex-row gap-4 md:items-center">
+                                    <div className="flex-1 space-y-2">
+                                      <Label className="text-xl font-bold flex items-center gap-3 text-[#0a2342]">
+                                        <div className="bg-[#0a2342] text-white rounded-full p-1 w-7 h-7 flex items-center justify-center">
+                                          <Info className="w-4 h-4" strokeWidth={3} />
+                                        </div>
+                                        Avatar-Eigenschaften und Präferenzen
+                                      </Label>
+                                      <p className="text-sm text-muted-foreground pl-10">Nutze dies für exakt definierte Eigenschaften wie &quot;3 Jahre Arbeitserfahrung&quot;, die fest zu dieser Persona gehören.</p>
                                     </div>
                                     <Input
                                       value={roleVars['Avatar_Eigenschaften_und_Praeferenzen'] || ''}
@@ -711,9 +730,9 @@ export default function PromptPlatform() {
                   <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
                   <p className="text-muted-foreground">Analytics und Ergebnisse deines Fragebogens</p>
                 </div>
-                <Button variant="outline" className="gap-2" onClick={downloadCSV} disabled={results.length === 0}>
+                <Button variant="outline" className="gap-2" onClick={downloadExcel} disabled={results.length === 0}>
                   <Download className="w-4 h-4" />
-                  CSV Exportieren
+                  Excel Exportieren
                 </Button>
               </div>
 
@@ -726,7 +745,7 @@ export default function PromptPlatform() {
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-3xl font-bold">{Object.keys(aggData.stats).length}</CardTitle>
+                    <CardTitle className="text-3xl font-bold">{Object.keys(aggData.stats).length > 0 ? Object.keys(aggData.stats).length : getModelsToRun().length}</CardTitle>
                     <CardDescription>Verwendete Modelle</CardDescription>
                   </CardHeader>
                 </Card>
@@ -738,26 +757,32 @@ export default function PromptPlatform() {
                 </Card>
               </div>
 
+              <Card className="shadow-sm border-primary/20 bg-card">
+                <CardHeader className="md:flex-row md:items-center justify-between gap-4 py-4">
+                  <div>
+                    <CardTitle className="text-xl">📊 Dashboard Ansicht & Filter</CardTitle>
+                  </div>
+                  <div className="w-full md:w-[400px]">
+                    <Select value={dashboardRoleFilter} onValueChange={setDashboardRoleFilter}>
+                      <SelectTrigger className="w-full bg-background border-primary/20">
+                        <SelectValue placeholder="Rollen-Filter" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Alle">-- Alle Rollen kombiniert (Durchschnitt) --</SelectItem>
+                        {Array.from(new Set(results.map(r => r.combo['Rolle'] ? (r.combo['Rolle'].includes('(') ? r.combo['Rolle'].split('(')[0].trim() : r.combo['Rolle']) : 'Keine Rolle'))).filter(Boolean).map(role => (
+                          <SelectItem key={role!} value={role!}>{role}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </CardHeader>
+              </Card>
+
               {Object.keys(aggData.stats).length > 0 ? (
                 <Card className="shadow-sm">
-                  <CardHeader className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                    <div>
-                      <CardTitle>Modell-Vergleich nach Rolle (1-7)</CardTitle>
-                      <CardDescription>Wähle rechts eine Rolle aus dem Dropdown, um die Leistung der Modelle direkt zu vergleichen.</CardDescription>
-                    </div>
-                    <div className="w-full md:w-[350px]">
-                      <Select value={dashboardRoleFilter} onValueChange={setDashboardRoleFilter}>
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Rollen-Filter" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Alle">-- Alle Rollen kombiniert (Durchschnitt) --</SelectItem>
-                          {Array.from(new Set(results.map(r => r.combo['Rolle'] ? (r.combo['Rolle'].includes('(') ? r.combo['Rolle'].split('(')[0].trim() : r.combo['Rolle']) : 'Keine Rolle'))).filter(Boolean).map(role => (
-                            <SelectItem key={role!} value={role!}>{role}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                  <CardHeader>
+                    <CardTitle>Modell-Vergleich (1-7) für: <span className="text-primary">{dashboardRoleFilter}</span></CardTitle>
+                    <CardDescription>Performance der Modelle anhand der extrahierten Likert-Skalen.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="h-[450px] w-full pt-4">
