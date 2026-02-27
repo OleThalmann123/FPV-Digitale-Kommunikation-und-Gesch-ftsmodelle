@@ -72,8 +72,9 @@ function parseLikertScores(responseText: string): Record<string, number> {
     // Silently fall through to regex if JSON parsing fails
   }
 
-  // 1. Strict regex trying to match structures like [Frage 1: 5], **Frage 1**: 5, [Frage 1] - 5
-  let regex = /\[?\*?\*?Frage\s*(\d+)\*?\*?\s*\]?[\s:=-]+\[?\*?\*?([1-7])\*?\*?\]?/gi;
+  // 1. JSON-like regex fallback (for broken JSON or unescaped characters breaking JSON.parse)
+  // Looks for: "frage": 1 ... "score": 5
+  let regex = /"frage"\s*:\s*(\d+)[^}]*?"score"\s*:\s*([1-7])/gi;
   let match;
   let hasMatches = false;
 
@@ -81,13 +82,20 @@ function parseLikertScores(responseText: string): Record<string, number> {
     scores[`Frage ${match[1]}`] = parseInt(match[2], 10);
     hasMatches = true;
   }
+  if (hasMatches) return scores;
 
-  // 2. Fallback: Just look for "Frage X" and pick the first 1-7 digit that follows shortly after
-  if (!hasMatches) {
-    regex = /Frage\s*(\d+)[^\d]{1,15}?([1-7])/gi;
-    while ((match = regex.exec(responseText)) !== null) {
-      scores[`Frage ${match[1]}`] = parseInt(match[2], 10);
-    }
+  // 2. Strict regex trying to match structures like [Frage 1: 5], **Frage 1**: 5, [Frage 1] - 5
+  regex = /\[?\*?\*?Frage\s*(\d+)\*?\*?\s*\]?[\s:=-]+\[?\*?\*?([1-7])\*?\*?\]?/gi;
+  while ((match = regex.exec(responseText)) !== null) {
+    scores[`Frage ${match[1]}`] = parseInt(match[2], 10);
+    hasMatches = true;
+  }
+  if (hasMatches) return scores;
+
+  // 3. Fallback: Just look for "Frage X" and pick the first 1-7 digit that follows shortly after
+  regex = /Frage\s*(\d+)[^\d]{1,50}?([1-7])/gi;
+  while ((match = regex.exec(responseText)) !== null) {
+    scores[`Frage ${match[1]}`] = parseInt(match[2], 10);
   }
 
   return scores;
