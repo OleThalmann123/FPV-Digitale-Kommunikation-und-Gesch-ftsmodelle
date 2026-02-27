@@ -751,10 +751,14 @@ export default function PromptPlatform() {
               <div className="flex items-center justify-between pb-4">
                 <div>
                   <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-                  <p className="text-muted-foreground">Analytics und Ergebnisse deines Fragebogens</p>
+                  <p className="text-muted-foreground">Analytics und Ergebnisse deines Fragebogens (Live-Export jederzeit möglich)</p>
                 </div>
                 <Button variant="outline" className="gap-2" onClick={downloadExcel} disabled={filteredResultsAll.length === 0}>
-                  <Download className="w-4 h-4" />
+                  {isGenerating ? (
+                    <div className="w-4 h-4 rounded-full border-2 border-primary border-t-transparent flex animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
                   Excel Exportieren
                 </Button>
               </div>
