@@ -494,10 +494,10 @@ export default function PromptPlatform() {
           {activeTab === 'generator' && (
             <div className="w-full pb-16">
               <Tabs defaultValue="prompts" className="w-full">
-                <TabsList className="mb-8 grid w-full grid-cols-3">
-                  <TabsTrigger value="prompts" className="py-3 text-base">1. Prompts</TabsTrigger>
-                  <TabsTrigger value="variables" className="py-3 text-base">2. Variablen</TabsTrigger>
-                  <TabsTrigger value="generate" className="py-3 text-base">3. Start & Vorschau</TabsTrigger>
+                <TabsList className="mb-8 w-full flex h-14 p-1 bg-muted/50 rounded-xl">
+                  <TabsTrigger value="prompts" className="flex-1 h-full text-base font-semibold rounded-lg">1. Prompts</TabsTrigger>
+                  <TabsTrigger value="variables" className="flex-1 h-full text-base font-semibold rounded-lg">2. Variablen</TabsTrigger>
+                  <TabsTrigger value="generate" className="flex-1 h-full text-base font-semibold rounded-lg">3. Start & Vorschau</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="prompts" className="w-full space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
