@@ -323,8 +323,8 @@ export default function PromptPlatform() {
         Modell: row.modelId
       };
       tableData.columns.forEach(col => {
-        const cell = row.scores[col];
-        rowItem[col] = cell ? Number((cell.sum / cell.count).toFixed(2)) : null;
+        const val = row[col];
+        rowItem[col] = val !== undefined ? Number(val) : null;
       });
       return rowItem;
     });
