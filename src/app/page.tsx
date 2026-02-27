@@ -311,10 +311,25 @@ export default function PromptPlatform() {
     });
     const ws2 = XLSX.utils.json_to_sheet(aggRows);
 
+    // Sheet 3: Graph Data (Easy Charting in Excel)
+    const aggData = getAggregatedData();
+    const chartData = aggData.fragen.map(frage => {
+      const dataPoint: any = { 'Frage / Metrik': frage };
+      Object.keys(aggData.stats).forEach(modelId => {
+        const stat = aggData.stats[modelId][frage];
+        dataPoint[modelId] = stat ? Number((stat.sum / stat.count).toFixed(2)) : null;
+      });
+      return dataPoint;
+    });
+    const ws3 = XLSX.utils.json_to_sheet(chartData);
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws1, "Raw Data");
+    XLSX.utils.book_append_sheet(wb, ws1, "1. Einzelansicht");
     if (aggRows.length > 0) {
-      XLSX.utils.book_append_sheet(wb, ws2, "Likert Aggregations");
+      XLSX.utils.book_append_sheet(wb, ws2, "2. Tabellarische Übersicht");
+    }
+    if (chartData.length > 0) {
+      XLSX.utils.book_append_sheet(wb, ws3, "3. Graphik Daten");
     }
 
     XLSX.writeFile(wb, `prompt_results_${Date.now()}.xlsx`);
@@ -411,6 +426,15 @@ export default function PromptPlatform() {
   };
 
   const modelColors = getModelColors();
+
+  const filteredResults = results.filter(r => {
+    if (r.status !== 'success' || !r.response) return false;
+    let roleName = r.combo['Rolle'] || 'Keine Rolle';
+    if (roleName.includes('(')) roleName = roleName.split('(')[0].trim();
+    if (dashboardRoleFilter !== 'Alle' && roleName !== dashboardRoleFilter) return false;
+    return true;
+  });
+  const currentFilterN = filteredResults.length;
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -781,7 +805,7 @@ export default function PromptPlatform() {
               {Object.keys(aggData.stats).length > 0 ? (
                 <Card className="shadow-sm">
                   <CardHeader>
-                    <CardTitle>Modell-Vergleich (1-7) für: <span className="text-primary">{dashboardRoleFilter}</span></CardTitle>
+                    <CardTitle className="text-xl">Modell-Vergleich (1-7) für: <span className="text-primary">{dashboardRoleFilter}</span> <span className="text-muted-foreground ml-2 text-sm font-normal">(n = {currentFilterN})</span></CardTitle>
                     <CardDescription>Performance der Modelle anhand der extrahierten Likert-Skalen.</CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -849,69 +873,78 @@ export default function PromptPlatform() {
               )}
 
               {results.length > 0 && (
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between">
-                    <div>
-                      <CardTitle>Detaillierte Antworten (Fließtext)</CardTitle>
-                      <CardDescription>Alle abgerufenen Datensätze auf Einzel-Ebene.</CardDescription>
-                    </div>
+                <Card className="shadow-sm">
+                  <CardHeader>
+                    <CardTitle className="text-xl">Einzelansicht (Rohdaten)</CardTitle>
+                    <CardDescription>Jeder einzelne ausgeführte Prompt als detaillierte Zeile (insgesamt {results.length} generierte Antworten). Diese Ansicht entspricht auch der ersten Seite deines Excel-Exports!</CardDescription>
                   </CardHeader>
-                  <CardContent className="p-0 border-t">
-                    <div className="overflow-x-auto">
+                  <CardContent>
+                    <div className="overflow-x-auto rounded-md border max-h-[600px] overflow-y-auto bg-card">
                       <Table>
-                        <TableHeader>
+                        <TableHeader className="bg-muted/50 sticky top-0 z-10 shadow-sm">
                           <TableRow>
-                            <TableHead className="w-[80px]">Status</TableHead>
-                            <TableHead className="w-[200px]">Model & Persona</TableHead>
-                            <TableHead>Antwort / Resultat</TableHead>
+                            <TableHead className="w-[80px] font-semibold text-center">ID</TableHead>
+                            <TableHead className="w-[100px] font-semibold">Status</TableHead>
+                            <TableHead className="w-[140px] font-semibold">Modell</TableHead>
+                            <TableHead className="w-[200px] font-semibold">Rolle</TableHead>
+                            <TableHead className="font-semibold">Kombination & Log-Antwort</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {results.map((r, i) => (
-                            <TableRow key={r.id}>
-                              <TableCell>
-                                {r.status === 'pending' && <span className="text-muted-foreground text-xs uppercase font-bold">Pending</span>}
-                                {r.status === 'loading' && <span className="text-blue-500 text-xs uppercase font-bold animate-pulse">Running</span>}
-                                {r.status === 'success' && <span className="text-green-500 text-xs uppercase font-bold">Success</span>}
-                                {r.status === 'error' && <span className="text-red-500 text-xs uppercase font-bold">Error</span>}
-                              </TableCell>
-                              <TableCell className="align-top">
-                                <div className="flex flex-col gap-2">
-                                  <div className="flex flex-wrap gap-1.5">
-                                    <Badge variant="outline" className="font-medium text-[10px] border-primary/20 text-primary bg-primary/5">{r.modelId}</Badge>
-                                    {Object.entries(r.combo).filter(([_, v]) => v).slice(0, 3).map(([key, val]) => (
-                                      <Badge key={key} variant="secondary" className="text-[10px] font-normal truncate max-w-[150px]" title={`${key}: ${val}`}>
-                                        {val}
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                </div>
-                              </TableCell>
-                              <TableCell className="align-top">
-                                {r.status === 'loading' ? (
-                                  <div className="flex items-center space-x-2 text-muted-foreground animate-pulse mt-2">
-                                    <div className="h-4 w-4 rounded-full bg-current"></div>
-                                    <span className="text-sm">Lädt/Generiert (Erst-Download d. Modells kann dauern)...</span>
-                                  </div>
-                                ) : (
-                                  <div className="flex flex-col gap-2">
-                                    {r.status === 'success' && (
-                                      <div className="flex gap-2 flex-wrap">
-                                        {Object.entries(parseLikertScores(r.response)).map(([f, s]) => (
-                                          <span key={f} className="text-xs bg-secondary text-secondary-foreground font-semibold px-2 py-0.5 rounded shadow-sm border">
-                                            {f}: {s}/7
+                          {results.map((r, idx) => {
+                            const simpleRole = r.combo['Rolle'] ? (r.combo['Rolle'].includes('(') ? r.combo['Rolle'].split('(')[0].trim() : r.combo['Rolle']) : '-';
+                            return (
+                              <TableRow key={idx} className="hover:bg-muted/50 transition-colors group">
+                                <TableCell className="font-mono text-muted-foreground text-center tabular-nums">{r.id}</TableCell>
+                                <TableCell>
+                                  <Badge variant={r.status === 'success' ? 'default' : r.status === 'error' ? 'destructive' : 'secondary'} className="text-[10px] w-20 justify-center">
+                                    {r.status}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="outline" className="font-medium text-[10px] border-primary/20 text-primary bg-primary/5">{r.modelId}</Badge>
+                                </TableCell>
+                                <TableCell className="font-medium align-top pt-4">{simpleRole}</TableCell>
+                                <TableCell className="align-top">
+                                  {r.status === 'loading' ? (
+                                    <div className="flex items-center space-x-2 text-muted-foreground animate-pulse mt-1">
+                                      <div className="h-4 w-4 rounded-full bg-current"></div>
+                                      <span className="text-sm">Lädt/Generiert (Erst-Download d. Modells kann dauern)...</span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col gap-3 py-1">
+                                      {/* Tags for Variables */}
+                                      <div className="flex gap-1.5 flex-wrap">
+                                        {Object.entries(r.combo).filter(([k]) => k !== 'Rolle').map(([k, v]) => (
+                                          <span key={k} className="bg-zinc-100 dark:bg-zinc-900 border px-1.5 py-0.5 rounded shadow-sm text-zinc-600 dark:text-zinc-400 font-mono text-[10px]">
+                                            {v}
                                           </span>
                                         ))}
                                       </div>
-                                    )}
-                                    <div className="text-sm whitespace-pre-wrap prose prose-sm max-w-none max-h-[300px] overflow-auto bg-card border rounded p-3">
-                                      {r.response || (r.status === 'error' ? 'An error occurred during generation.' : 'Wartet auf Ausführung...')}
+
+                                      {/* Extracted Likert Scores */}
+                                      {r.status === 'success' && (
+                                        <div className="flex gap-2 flex-wrap">
+                                          {Object.entries(parseLikertScores(r.response)).map(([f, s]) => (
+                                            <span key={f} className="text-xs bg-secondary text-secondary-foreground font-semibold px-2 py-0.5 rounded shadow-sm border">
+                                              {f}: <span className={s >= 4 ? 'text-green-600' : 'text-orange-600'}>{s}</span>/7
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+
+                                      {/* Raw Answer Block */}
+                                      {r.response && (
+                                        <div className="bg-zinc-50 dark:bg-zinc-900/50 p-3 rounded-md border text-zinc-800 dark:text-zinc-200 font-mono text-xs whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed shadow-inner">
+                                          {r.response}
+                                        </div>
+                                      )}
                                     </div>
-                                  </div>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </div>
