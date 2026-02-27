@@ -279,11 +279,20 @@ export default function PromptPlatform() {
   const currentModelsCount = getModelsToRun().length;
   const comboCount = generateCombinations().length;
 
+  const filteredResultsAll = results.filter(r => {
+    let roleName = r.combo['Rolle'] || 'Keine Rolle';
+    if (roleName.includes('(')) roleName = roleName.split('(')[0].trim();
+    if (dashboardRoleFilter !== 'Alle' && roleName !== dashboardRoleFilter) return false;
+    return true;
+  });
+
+  const filteredResultsValid = filteredResultsAll.filter(r => r.status === 'success' && r.response);
+
   const downloadExcel = () => {
-    if (results.length === 0) return;
+    if (filteredResultsAll.length === 0) return;
 
     // Sheet 1: Raw Data
-    const rawData = results.map(r => {
+    const rawData = filteredResultsAll.map(r => {
       const rowItem: any = {
         ID: r.id,
         Status: r.status,
@@ -341,15 +350,7 @@ export default function PromptPlatform() {
     const groupStats: Record<string, { [frage: string]: { sum: number, count: number } }> = {};
     const allFragen = new Set<string>();
 
-    results.filter(r => r.status === 'success' && r.response).forEach(r => {
-      let roleName = r.combo['Rolle'] || 'Keine Rolle';
-      if (roleName.includes('(')) roleName = roleName.split('(')[0].trim();
-
-      // If a specific role is selected, filter out other roles
-      if (dashboardRoleFilter !== 'Alle' && roleName !== dashboardRoleFilter) {
-        return;
-      }
-
+    filteredResultsValid.forEach(r => {
       const scores = parseLikertScores(r.response);
 
       // We always group by model inside the chart, so we can compare the models exactly!
@@ -375,7 +376,7 @@ export default function PromptPlatform() {
     const allFragenForTable = new Set<string>();
     const grouped: any = {};
 
-    results.filter(r => r.status === 'success' && r.response).forEach(r => {
+    filteredResultsValid.forEach(r => {
       const scores = parseLikertScores(r.response);
       const roleName = r.combo['Rolle'] || 'Keine Rolle';
       const simplifyRole = roleName.includes('(') ? roleName.split('(')[0].trim() : roleName;
@@ -428,15 +429,7 @@ export default function PromptPlatform() {
   };
 
   const modelColors = getModelColors();
-
-  const filteredResults = results.filter(r => {
-    if (r.status !== 'success' || !r.response) return false;
-    let roleName = r.combo['Rolle'] || 'Keine Rolle';
-    if (roleName.includes('(')) roleName = roleName.split('(')[0].trim();
-    if (dashboardRoleFilter !== 'Alle' && roleName !== dashboardRoleFilter) return false;
-    return true;
-  });
-  const currentFilterN = filteredResults.length;
+  const currentFilterN = filteredResultsValid.length;
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -752,7 +745,7 @@ export default function PromptPlatform() {
                   <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
                   <p className="text-muted-foreground">Analytics und Ergebnisse deines Fragebogens</p>
                 </div>
-                <Button variant="outline" className="gap-2" onClick={downloadExcel} disabled={results.length === 0}>
+                <Button variant="outline" className="gap-2" onClick={downloadExcel} disabled={filteredResultsAll.length === 0}>
                   <Download className="w-4 h-4" />
                   Excel Exportieren
                 </Button>
@@ -870,11 +863,11 @@ export default function PromptPlatform() {
                 </Card>
               )}
 
-              {results.length > 0 && (
+              {filteredResultsAll.length > 0 && (
                 <Card className="shadow-sm">
                   <CardHeader>
                     <CardTitle className="text-xl">Einzelansicht (Rohdaten)</CardTitle>
-                    <CardDescription>Jeder einzelne ausgeführte Prompt als detaillierte Zeile (insgesamt {results.length} generierte Antworten). Diese Ansicht entspricht auch der ersten Seite deines Excel-Exports!</CardDescription>
+                    <CardDescription>Jeder einzelne ausgeführte Prompt als detaillierte Zeile (insgesamt {filteredResultsAll.length} Ergebnisse im aktuellen Filter). Diese Ansicht entspricht auch der ersten Seite deines Excel-Exports!</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="overflow-x-auto rounded-md border max-h-[600px] overflow-y-auto bg-card">
@@ -889,7 +882,7 @@ export default function PromptPlatform() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {results.map((r, idx) => {
+                          {filteredResultsAll.map((r, idx) => {
                             const simpleRole = r.combo['Rolle'] ? (r.combo['Rolle'].includes('(') ? r.combo['Rolle'].split('(')[0].trim() : r.combo['Rolle']) : '-';
                             return (
                               <TableRow key={idx} className="hover:bg-muted/50 transition-colors group">
