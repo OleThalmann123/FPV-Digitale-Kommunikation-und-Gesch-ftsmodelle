@@ -796,8 +796,8 @@ export default function PromptPlatform() {
               {Object.keys(aggData.stats).length > 0 ? (
                 <Card className="shadow-sm">
                   <CardHeader>
-                    <CardTitle className="text-xl">Modell-Vergleich (1-7) für: <span className="text-primary">{dashboardRoleFilter}</span> <span className="text-muted-foreground ml-2 text-sm font-normal">(n = {currentFilterN})</span></CardTitle>
-                    <CardDescription>Performance der Modelle anhand der extrahierten Likert-Skalen.</CardDescription>
+                    <CardTitle className="text-xl">Modell-Vergleich (1-7) für: <span className="text-primary">{dashboardRoleFilter}</span> <span className="text-muted-foreground ml-2 text-sm font-normal">(n = {currentFilterN} Datenpunkte)</span></CardTitle>
+                    <CardDescription>Performance der Modelle anhand der extrahierten Likert-Skalen aus den erfolgreichen Antworten.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="h-[450px] w-full pt-4">
@@ -826,7 +826,7 @@ export default function PromptPlatform() {
                 <Card className="shadow-sm">
                   <CardHeader>
                     <CardTitle>Tabellarische Übersicht</CardTitle>
-                    <CardDescription>Daten-Matrix aller Likert-Werte aufgeschlüsselt nach Rolle und Modell.</CardDescription>
+                    <CardDescription>Daten-Matrix aller Likert-Werte aufgeschlüsselt nach Rolle und Modell (Durchschnitt aus {currentFilterN} Werten).</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="overflow-x-auto rounded-md border">
@@ -867,7 +867,7 @@ export default function PromptPlatform() {
                 <Card className="shadow-sm">
                   <CardHeader>
                     <CardTitle className="text-xl">Einzelansicht (Rohdaten)</CardTitle>
-                    <CardDescription>Jeder einzelne ausgeführte Prompt als detaillierte Zeile (insgesamt {filteredResultsAll.length} Ergebnisse im aktuellen Filter). Diese Ansicht entspricht auch der ersten Seite deines Excel-Exports!</CardDescription>
+                    <CardDescription>Jeder einzelne ausgeführte Prompt als detaillierte Zeile (zeigt alle {filteredResultsAll.length} Prompts im Filter, davon n={currentFilterN} erfolgreich). Diese Ansicht entspricht auch der ersten Seite deines Excel-Exports!</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="overflow-x-auto rounded-md border max-h-[600px] overflow-y-auto bg-card">
