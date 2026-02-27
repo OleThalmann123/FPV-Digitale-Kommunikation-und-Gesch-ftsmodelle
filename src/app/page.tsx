@@ -631,24 +631,6 @@ export default function PromptPlatform() {
                               const roleVars = roleVariables[role] || {};
                               return (
                                 <TabsContent key={role} value={role} className="space-y-6 animate-in fade-in">
-                                  <div className="bg-primary/5 p-5 rounded-lg border border-primary/20 mb-6 flex flex-col md:flex-row gap-4 md:items-center">
-                                    <div className="flex-1 space-y-2">
-                                      <Label className="text-xl font-bold flex items-center gap-3 text-[#0a2342]">
-                                        <div className="bg-[#0a2342] text-white rounded-full p-1 w-7 h-7 flex items-center justify-center">
-                                          <Info className="w-4 h-4" strokeWidth={3} />
-                                        </div>
-                                        Avatar-Eigenschaften und Präferenzen
-                                      </Label>
-                                      <p className="text-sm text-muted-foreground pl-10">Nutze dies für exakt definierte Eigenschaften wie &quot;3 Jahre Arbeitserfahrung&quot;, die fest zu dieser Persona gehören.</p>
-                                    </div>
-                                    <Input
-                                      value={roleVars['Avatar_Eigenschaften_und_Praeferenzen'] || ''}
-                                      onChange={(e) => updateRoleVariable(role, 'Avatar_Eigenschaften_und_Praeferenzen', e.target.value)}
-                                      placeholder="Z.b: Mind. 3 Jahre Arbeitserfahrung"
-                                      className="text-base py-6 flex-1 bg-background"
-                                    />
-                                  </div>
-
                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-6 bg-card">
                                     {variables.filter(v => v !== 'Rolle' && v !== 'Avatar_Eigenschaften_und_Praeferenzen').map(v => (
                                       <div key={v} className="space-y-3">
@@ -661,6 +643,20 @@ export default function PromptPlatform() {
                                         />
                                       </div>
                                     ))}
+
+                                    <div className="space-y-3 md:col-span-2 pt-2">
+                                      <Label className="text-base font-semibold text-foreground/80 flex items-center gap-2">
+                                        Avatar-Eigenschaften und Präferenzen
+                                        <Info className="w-4 h-4 text-muted-foreground" />
+                                      </Label>
+                                      <Input
+                                        value={roleVars['Avatar_Eigenschaften_und_Praeferenzen'] || ''}
+                                        onChange={(e) => updateRoleVariable(role, 'Avatar_Eigenschaften_und_Praeferenzen', e.target.value)}
+                                        placeholder="Z.b: Mind. 3 Jahre Arbeitserfahrung..."
+                                        className="text-base py-5 bg-muted/20"
+                                      />
+                                      <p className="text-xs text-muted-foreground">Nutze dies für exakt definierte Eigenschaften, die fest zu dieser Persona gehören.</p>
+                                    </div>
                                   </div>
                                 </TabsContent>
                               );
