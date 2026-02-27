@@ -100,6 +100,7 @@ const PROFILE_VARIABLES = [
   'Nationalitaet',
   'Haushalt',
   'Ausbildung',
+  'Berufserfahrung',
   'Wohnsitzland',
   'Postleitzahl',
   'Avatar_Eigenschaften_und_Praeferenzen'
@@ -120,7 +121,7 @@ export default function PromptPlatform() {
   const [dashboardRoleFilter, setDashboardRoleFilter] = useState<string>('Alle');
   const [apiKey, setApiKey] = useLocalStorage('pp_apiKey', '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');
   const [modelList, setModelList] = useLocalStorage('pp_modelList', 'publicai:swiss-ai/apertus-70b-instruct\nopenai/gpt-4o-mini');
-  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json', 'Versetze dich in die Rolle einer Person mit exakt folgendem Profil:\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Besonderheiten: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\nBitte bearbeite den untenstehenden Fragebogen strikt aus der Perspektive dieser Person.\nBewerte jede Frage/Aussage auf einer Likert-Skala von 1 bis 7 (1 = Stimme überhaupt nicht zu / Finde ich gar nicht gut, 7 = Stimme voll und ganz zu / Finde ich sehr gut).\n\nWICHTIG: Antworte ZWINGEND in einem validen JSON-Format. Nutze exakt dieses Format:\n{\n  "bewertungen": [\n    {\n      "frage": 1,\n      "score": 5,\n      "begruendung": "kurze Begründung"\n    },\n    {\n      "frage": 2,\n      "score": 3,\n      "begruendung": "..."\n    }\n  ]\n}\nGib niemals etwas anderes als das JSON aus!\n\nFragebogen:\n{{Fragebogen}}\n\nDeine JSON-Antwort:');
+  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v6', 'Versetze dich in die Rolle einer Person mit exakt folgendem Profil:\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Besonderheiten: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\nBitte bearbeite den untenstehenden Fragebogen strikt aus der Perspektive dieser Person.\nBewerte jede Frage/Aussage auf einer Likert-Skala von 1 bis 7 (1 = Stimme überhaupt nicht zu / Finde ich gar nicht gut, 7 = Stimme voll und ganz zu / Finde ich sehr gut).\n\nWICHTIG: Antworte ZWINGEND in einem validen JSON-Format. Nutze exakt dieses Format:\n{\n  "bewertungen": [\n    {\n      "frage": 1,\n      "score": 5,\n      "begruendung": "kurze Begründung"\n    },\n    {\n      "frage": 2,\n      "score": 3,\n      "begruendung": "..."\n    }\n  ]\n}\nGib niemals etwas anderes als das JSON aus!\n\nFragebogen:\n{{Fragebogen}}\n\nDeine JSON-Antwort:');
   const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen', 'Frage 1: Wie gefällt dir die Idee einer App, die deine täglichen Einkäufe automatisch und basierend auf deinen Routinen an deine Haustür liefert?\nFrage 2: Welche Bedenken hättest du bei der Nutzung von KI-gestützter Finanzberatung für deine privaten Ersparnisse?\nFrage 3: Wenn dir dein Arbeitgeber ein rein virtuelles Büro im Metaverse als hybride Alternative zum Home-Office anbieten würde, wie wäre deine ehrliche Meinung dazu?');
 
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
@@ -130,15 +131,16 @@ export default function PromptPlatform() {
       Nationalitaet: 'Schweiz',
       Haushalt: 'Zwei Erwachsene mit Kindern, Single',
       Ausbildung: 'Master, Bachelor',
+      Berufserfahrung: '3 Jahre',
       Wohnsitzland: 'Schweiz',
       Postleitzahl: '8704, 8000',
-      Avatar_Eigenschaften_und_Praeferenzen: 'Mind. 3 Jahre Arbeitserfahrung'
+      Avatar_Eigenschaften_und_Praeferenzen: ''
     };
     return acc;
   }, {} as Record<string, Record<string, string>>);
 
-  const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v5', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v5', defaultRoleVars);
+  const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v6', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string }[]>([]);
