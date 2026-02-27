@@ -343,12 +343,12 @@ export default function PromptPlatform() {
     const ws3 = XLSX.utils.json_to_sheet(chartData);
 
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws1, "1. Einzelansicht");
+    XLSX.utils.book_append_sheet(wb, ws1, "1_Einzelansicht");
     if (aggRows.length > 0) {
-      XLSX.utils.book_append_sheet(wb, ws2, "2. Tabellarische Übersicht");
+      XLSX.utils.book_append_sheet(wb, ws2, "2_Tabellarische_Uebersicht");
     }
     if (chartData.length > 0) {
-      XLSX.utils.book_append_sheet(wb, ws3, "3. Graphik Daten");
+      XLSX.utils.book_append_sheet(wb, ws3, "3_Graphik");
     }
 
     XLSX.writeFile(wb, `prompt_results_${Date.now()}.xlsx`);
