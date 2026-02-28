@@ -12,6 +12,9 @@ const execPromise = util.promisify(exec);
 export type ModelConfig = {
     type: 'openrouter' | 'local' | 'publicai';
     modelId: string;
+    temperature?: number;
+    top_p?: number;
+    max_tokens?: number;
 };
 
 export async function processPrompt(
@@ -19,8 +22,19 @@ export async function processPrompt(
     modelConfig: ModelConfig,
     apiKey?: string
 ): Promise<string> {
+    const commonPayload: any = {
+        model: modelConfig.modelId,
+        messages: [{ role: 'user', content: prompt }],
+    };
+    if (modelConfig.temperature !== undefined) commonPayload.temperature = modelConfig.temperature;
+    if (modelConfig.top_p !== undefined) commonPayload.top_p = modelConfig.top_p;
+    if (modelConfig.max_tokens !== undefined) commonPayload.max_tokens = modelConfig.max_tokens;
+
     if (modelConfig.type === 'openrouter') {
         if (!apiKey) throw new Error("API Key required for OpenRouter");
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -30,10 +44,11 @@ export async function processPrompt(
                 'X-Title': 'Meta Prompt Platform',
             },
             body: JSON.stringify({
+                ...commonPayload,
                 model: modelConfig.modelId || 'openrouter/auto',
-                messages: [{ role: 'user', content: prompt }],
             }),
-        });
+            signal: controller.signal
+        }).finally(() => clearTimeout(timeoutId));
 
         if (!response.ok) {
             const errorBody = await response.text();
@@ -47,40 +62,60 @@ export async function processPrompt(
         let response;
         let attempts = 0;
         const maxAttempts = 3;
+        let lastError = null;
 
         while (attempts < maxAttempts) {
-            response = await fetch('https://api.publicai.co/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${publicAiKey}`,
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Prompt-Platform'
-                },
-                body: JSON.stringify({
-                    model: modelConfig.modelId || 'swiss-ai/apertus-70b-instruct',
-                    messages: [{ role: 'user', content: prompt }],
-                }),
-            });
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minute timeout to allow model loading
 
-            if (response.ok) break;
+                response = await fetch('https://api.publicai.co/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${publicAiKey}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Prompt-Platform'
+                    },
+                    body: JSON.stringify({
+                        ...commonPayload,
+                        model: modelConfig.modelId || 'swiss-ai/apertus-70b-instruct',
+                    }),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
 
-            // If it's a 504 Gateway Timeout or 429 Rate Limit, we shouldn't fail immediately
-            if (response.status === 504 || response.status === 502 || response.status === 429) {
+                if (response.ok) break;
+
+                // If it's a 504 Gateway Timeout or 429 Rate Limit, we shouldn't fail immediately
+                if (response.status === 504 || response.status === 502 || response.status === 429) {
+                    attempts++;
+                    if (attempts < maxAttempts) {
+                        // Backoff: 2s, 4s...
+                        await new Promise(resolve => setTimeout(resolve, 2000 * attempts));
+                        continue;
+                    }
+                }
+
+                // For other errors or max attempts reached, we break and let it throw below
+                break;
+            } catch (err: any) {
+                lastError = err;
                 attempts++;
                 if (attempts < maxAttempts) {
-                    // Backoff: 2s, 4s...
                     await new Promise(resolve => setTimeout(resolve, 2000 * attempts));
                     continue;
+                } else {
+                    break;
                 }
             }
-
-            // For other errors or max attempts reached, we break and let it throw below
-            break;
         }
 
         if (!response || !response.ok) {
-            const errorBody = await response?.text().catch(() => 'No body');
-            throw new Error(`PublicAI API error nach ${attempts} Versuchen: ${response?.status} ${errorBody}`);
+            let errorBody = 'Unknown Error';
+            try {
+                if (response) errorBody = await response.text();
+            } catch (e) { }
+            throw new Error(`PublicAI API error nach ${attempts} Versuchen: ${response?.status || lastError?.message || 'Network Timeout'} ${errorBody}`);
         }
 
         const data = await response.json();
@@ -115,3 +150,110 @@ export async function processPrompt(
 
     throw new Error("Invalid model config type.");
 }
+
+export async function extractFromImages(
+    base64Images: string[],
+    apiKey: string,
+    fragebogen?: string
+): Promise<string> {
+    if (!apiKey) throw new Error("API Key required for OpenRouter");
+
+    const contentArray: any[] = [
+        {
+            type: "text",
+            text: `Bitte extrahiere die demografischen Profil-Variablen aus diesen Screenshots (falls vorhanden): Rolle, Geschlecht, Alter, Nationalitaet, Haushalt, Ausbildung, Berufserfahrung, Wohnsitzland, Postleitzahl, Avatar_Eigenschaften_und_Praeferenzen. 
+Zudem extrahiere mögliche Umfrage-Antworten oder Bewertungen (Likert Skala 1-7). 
+
+WICHTIG: Auf den Screenshots sind die Fragen eventuell nicht direkt ersichtlich. Bitte werte die erkennbaren Antworten (z.B. Radiobuttons, Slider auf Skala 1-7) in der Reihenfolge ihres Auftretens aus. 
+Falls ein Fragebogen als Kontext mitgeliefert wird, nutze diesen, um die Antworten den korrekten Fragen (z.B. Frage 1, Frage 2 etc.) zuzuordnen.
+${fragebogen ? `\nHIER IST DER FRAGEBOGEN ALS KONTEXT:\n---\n${fragebogen}\n---\n\nOrdne die Antworten chronologisch den Fragen in diesem Fragebogen zu.` : ''}
+
+Gib AUSSCHLIESSLICH ein valides JSON zurück in folgendem Format (ohne Markdown Code Blocks):
+{
+  "profil": {
+    "Rolle": "Extrahierter Wert oder leer",
+    "Geschlecht": "Extrahierter Wert oder leer",
+    "Alter": "Extrahierter Wert oder leer",
+    "Nationalitaet": "Extrahierter Wert oder leer",
+    "Haushalt": "Extrahierter Wert oder leer",
+    "Ausbildung": "Extrahierter Wert oder leer",
+    "Berufserfahrung": "Extrahierter Wert oder leer",
+    "Wohnsitzland": "Extrahierter Wert oder leer",
+    "Postleitzahl": "Extrahierter Wert oder leer",
+    "Avatar_Eigenschaften_und_Praeferenzen": "Weiteres wie z.b. Beruf etc."
+  },
+  "bewertungen": [
+    {
+      "frage": 1,
+      "score": 5
+    },
+    {
+      "frage": 2,
+      "score": 3
+    }
+  ]
+}`
+        },
+        ...base64Images.map(imgBase64 => ({
+            type: "image_url",
+            image_url: {
+                url: imgBase64
+            }
+        }))
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'http://localhost:3000',
+            'X-Title': 'Meta Prompt Platform',
+        },
+        body: JSON.stringify({
+            model: 'openai/gpt-4o', // Must use a vision model
+            messages: [{ role: 'user', content: contentArray }],
+        }),
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`OpenRouter API error: ${response.status} ${errorBody}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '{}';
+}
+
+export async function fetchOpenRouterModels(apiKey?: string) {
+    if (!apiKey) return [];
+    try {
+        const response = await fetch('https://openrouter.ai/api/v1/models', {
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+            }
+        });
+        if (!response.ok) return [];
+        const data = await response.json();
+        return data.data || [];
+    } catch {
+        return [];
+    }
+}
+
+export async function fetchPublicAIModels() {
+    try {
+        const publicAiKey = 'zpka_a401f6eba2f440e3a7807bf9dafe7d20_1d367ff1';
+        const response = await fetch('https://api.publicai.co/v1/models', {
+            headers: {
+                'Authorization': `Bearer ${publicAiKey}`,
+            }
+        });
+        if (!response.ok) return [];
+        const data = await response.json();
+        return data.data || [];
+    } catch {
+        return [];
+    }
+}
+

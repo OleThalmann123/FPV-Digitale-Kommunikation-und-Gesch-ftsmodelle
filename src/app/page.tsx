@@ -34,15 +34,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { processPrompt, ModelConfig } from './actions';
+import { processPrompt, ModelConfig, extractFromImages } from './actions';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { LayoutDashboard, FlaskConical, Download, Settings, Key, Info } from 'lucide-react';
+import { LayoutDashboard, FlaskConical, Download, Settings, Key, Info, History, Image as ImageIcon, Upload, Plus, Trash2, X, PlusCircle, Database } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import * as XLSX from 'xlsx';
+import { supabase } from '@/lib/supabase';
 
 function parseLikertScores(responseText: string): Record<string, number> {
   let bestScores: Record<string, number> = {};
@@ -140,10 +141,14 @@ const AVAILABLE_ROLES = [
 export default function PromptPlatform() {
   const [mounted, setMounted] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [activeTab, setActiveTab] = useState<'generator' | 'dashboard' | 'settings'>('generator');
+  const [activeTab, setActiveTab] = useState<'generator' | 'dashboard' | 'settings' | 'historie' | 'manual'>('generator');
   const [dashboardRoleFilter, setDashboardRoleFilter] = useState<string>('Alle');
   const [apiKey, setApiKey] = useLocalStorage('pp_apiKey', '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');
   const [modelList, setModelList] = useLocalStorage('pp_modelList', 'publicai:swiss-ai/apertus-70b-instruct\nopenai/gpt-4o-mini');
+  const [configuredModels, setConfiguredModels] = useLocalStorage<ModelConfig[]>('pp_configured_models_v3', [
+    { type: 'publicai', modelId: 'swiss-ai/apertus-70b-instruct', temperature: 0, top_p: 1, max_tokens: 8192 },
+    { type: 'openrouter', modelId: 'openai/gpt-4o-mini', temperature: 0, top_p: 1, max_tokens: 8192 }
+  ]);
   const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v7', 'Versetze dich in die Rolle einer Person mit exakt folgendem Profil:\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Besonderheiten: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\nBitte bearbeite den untenstehenden Fragebogen strikt aus der Perspektive dieser Person.\nBewerte jede Frage/Aussage auf einer Likert-Skala von 1 bis 7 (1 = Stimme überhaupt nicht zu / Finde ich gar nicht gut, 7 = Stimme voll und ganz zu / Finde ich sehr gut).\n\nWICHTIG: Antworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown (kein ```json). Nutze exakt dieses Format:\n{\n  "bewertungen": [\n    {\n      "frage": 1,\n      "score": 5,\n      "begruendung": "kurze Begründung"\n    },\n    {\n      "frage": 2,\n      "score": 3,\n      "begruendung": "..."\n    }\n  ]\n}\n\nFragebogen:\n{{Fragebogen}}\n\nDeine JSON-Antwort:');
   const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen', 'Frage 1: Wie gefällt dir die Idee einer App, die deine täglichen Einkäufe automatisch und basierend auf deinen Routinen an deine Haustür liefert?\nFrage 2: Welche Bedenken hättest du bei der Nutzung von KI-gestützter Finanzberatung für deine privaten Ersparnisse?\nFrage 3: Wenn dir dein Arbeitgeber ein rein virtuelles Büro im Metaverse als hybride Alternative zum Home-Office anbieten würde, wie wäre deine ehrliche Meinung dazu?');
 
@@ -167,9 +172,248 @@ export default function PromptPlatform() {
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string }[]>([]);
+  const [historicRuns, setHistoricRuns] = useState<any[]>([]);
+  const [activeRunId, setActiveRunId] = useState<number | null>(null);
+
+  type OfflineBatchItem = {
+    id: string;
+    images: string[];
+    status: 'idle' | 'loading' | 'success' | 'error';
+    result?: string;
+  };
+
+  type OfflineBatch = {
+    id: string;
+    modelName: string;
+    targetRunIds: number[];
+    items: OfflineBatchItem[];
+  };
+
+  const [offlineBatches, setOfflineBatches] = useLocalStorage<OfflineBatch[]>('pp_offline_batches_v1', []);
+  const [selectedRunsForSync, setSelectedRunsForSync] = useState<Record<string, string>>({});
+
+  const handleAddBatch = () => {
+    setOfflineBatches(prev => [...prev, { id: Date.now().toString(), modelName: 'Demoscope', targetRunIds: [], items: [] }]);
+  };
+
+  const handleRemoveBatch = (id: string) => {
+    setOfflineBatches(prev => prev.filter(b => b.id !== id));
+  };
+
+  const handleSyncBatchToRun = async (batchId: string, runId: number) => {
+    const batch = offlineBatches.find(b => b.id === batchId);
+    if (!batch) return;
+
+    await supabase.from('prompt_run_results').delete().eq('run_id', runId).eq('model_id', batch.modelName || 'Manuelles Modell');
+
+    const successfulItems = batch.items.filter(i => i.status === 'success' && i.result);
+    for (const item of successfulItems) {
+      let extractedData: any;
+      try {
+        let jsonString = item.result!;
+        const match = item.result!.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (match) jsonString = match[1];
+        extractedData = JSON.parse(jsonString);
+      } catch (e) { continue; }
+
+      const combo: Record<string, string> = {
+        Rolle: extractedData.profil?.Rolle || 'Unbekannt',
+      };
+      variables.forEach(v => {
+        if (v !== 'Rolle') combo[v] = extractedData.profil?.[v] || '';
+      });
+
+      const newResult = {
+        run_id: runId,
+        model_id: batch.modelName || 'Manuelles Modell',
+        combo: combo,
+        prompt_sent: 'Manuell extrahiert aus Screenshots',
+        response: JSON.stringify(extractedData),
+        status: 'success'
+      };
+
+      await supabase.from('prompt_run_results').insert(newResult).then(({ error }) => { if (error) console.error("Error saving manual result to run " + runId, error); });
+    }
+
+    setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
+      ...b,
+      targetRunIds: Array.from(new Set([...(b.targetRunIds || []), runId]))
+    } : b));
+
+    alert(`Extrahierten Datensatz in Tresor-Lauf gespeichert!`);
+
+    if (activeRunId === runId) {
+      loadHistoricRun(runId);
+    }
+  };
+
+  const handleRemoveBatchFromRun = async (batchId: string, runId: number) => {
+    const batch = offlineBatches.find(b => b.id === batchId);
+    if (!batch) return;
+
+    await supabase.from('prompt_run_results').delete().eq('run_id', runId).eq('model_id', batch.modelName || 'Manuelles Modell');
+    setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
+      ...b,
+      targetRunIds: (b.targetRunIds || []).filter(id => id !== runId)
+    } : b));
+
+    alert(`Datensatz aus Tresor-Lauf entfernt!`);
+
+    if (activeRunId === runId) {
+      loadHistoricRun(runId);
+    }
+  };
+
+  const handleAddBatchItem = (batchId: string) => {
+    setOfflineBatches(prev => prev.map(b => b.id === batchId ? { ...b, items: [...b.items, { id: Date.now().toString() + Math.random(), images: [], status: 'idle' }] } : b));
+  };
+
+  const handleRemoveBatchItem = (batchId: string, itemId: string) => {
+    setOfflineBatches(prev => prev.map(b => b.id === batchId ? { ...b, items: b.items.filter(i => i.id !== itemId) } : b));
+  };
+
+  const handleImageUpload = async (batchId: string, itemId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const base64Promises = files.map(file => {
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          resolve(event.target?.result as string);
+        };
+        reader.readAsDataURL(file);
+      });
+    });
+
+    const base64Images = await Promise.all(base64Promises);
+
+    setOfflineBatches(prev => prev.map(b => {
+      if (b.id === batchId) {
+        return {
+          ...b,
+          items: b.items.map(i => i.id === itemId ? { ...i, images: [...i.images, ...base64Images] } : i)
+        };
+      }
+      return b;
+    }));
+  };
+
+
+
+  const removeImageFromItem = (batchId: string, itemId: string, imageIndex: number) => {
+    setOfflineBatches(prev => prev.map(b => {
+      if (b.id === batchId) {
+        return {
+          ...b,
+          items: b.items.map(i => i.id === itemId ? { ...i, images: i.images.filter((_, idx) => idx !== imageIndex) } : i)
+        };
+      }
+      return b;
+    }));
+  };
+
+  const handleExtractBatchItem = async (batchId: string, itemId: string) => {
+    if (!apiKey) {
+      alert('Bitte API Key (OpenRouter) in den Settings eintragen, um die Vision API (z.B. GPT-4o) zu nutzen.');
+      return;
+    }
+    const batch = offlineBatches.find(b => b.id === batchId);
+    if (!batch) return;
+    const item = batch.items.find(i => i.id === itemId);
+    if (!item || item.images.length === 0) return;
+
+    setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
+      ...b, items: b.items.map(i => i.id === itemId ? { ...i, status: 'loading' } : i)
+    } : b));
+
+    try {
+      const res = await extractFromImages(item.images, apiKey, fragebogen);
+      setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
+        ...b, items: b.items.map(i => i.id === itemId ? { ...i, status: 'success', result: res } : i)
+      } : b));
+
+      let extractedData: any;
+      try {
+        let jsonString = res;
+        const match = res.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (match) jsonString = match[1];
+        extractedData = JSON.parse(jsonString);
+      } catch (e) {
+        throw new Error("Konnte Antwort nicht als JSON parsen: " + res);
+      }
+
+      const combo: Record<string, string> = {
+        Rolle: extractedData.profil?.Rolle || 'Unbekannt',
+      };
+      variables.forEach(v => {
+        if (v !== 'Rolle') combo[v] = extractedData.profil?.[v] || '';
+      });
+
+      let mockResponse = JSON.stringify(extractedData);
+
+      const newResult = {
+        id: `manuell-${Date.now()}-${Math.random()}`,
+        promptSent: 'Manuell extrahiert aus Screenshots',
+        response: mockResponse,
+        status: 'success' as const,
+        combo: combo,
+        modelId: batch.modelName || 'Manuelles Modell',
+        modelConfig: { type: 'openrouter', modelId: batch.modelName || 'openai/gpt-4o' }
+      };
+
+    } catch (err: any) {
+      setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
+        ...b, items: b.items.map(i => i.id === itemId ? { ...i, status: 'error', result: err.message } : i)
+      } : b));
+    }
+  };
+
+  const getOfflineTableData = (batchId: string) => {
+    const batch = offlineBatches.find(b => b.id === batchId);
+    if (!batch) return { rows: [], columns: [] };
+
+    const rows: any[] = [];
+    const allFragen = new Set<string>();
+
+    batch.items.filter(i => i.status === 'success' && i.result).forEach(item => {
+      try {
+        const scores = parseLikertScores(item.result!);
+        let comboInfo = "Unbekannt";
+        let match = item.result!.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        let jsonStr = match ? match[1] : item.result!;
+        const parsed = JSON.parse(jsonStr);
+        if (parsed.profil) {
+          comboInfo = parsed.profil.Rolle || Object.values(parsed.profil).join(', ');
+        }
+
+        const rowData: any = { Rolle: comboInfo };
+        Object.entries(scores).forEach(([frage, score]) => {
+          allFragen.add(frage);
+          rowData[frage] = score;
+        });
+        rows.push(rowData);
+      } catch (e) { }
+    });
+
+    const columns = Array.from(allFragen).sort((a, b) => parseInt(a.replace(/\D/g, '') || '0') - parseInt(b.replace(/\D/g, '') || '0'));
+    return { rows, columns };
+  };
+
+
+  const fetchHistory = async () => {
+    const { data } = await supabase
+      .from('prompt_runs')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (data) setHistoricRuns(data);
+  };
+
+
 
   useEffect(() => {
     setMounted(true);
+    fetchHistory();
   }, []);
 
   if (!mounted) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading Platform...</div>;
@@ -218,19 +462,37 @@ export default function PromptPlatform() {
     return combinations;
   };
 
+
+
+  const addModelConfig = (type: ModelConfig['type']) => {
+    const newId = Date.now().toString() + Math.floor(Math.random() * 1000).toString();
+    setConfiguredModels(prev => [
+      ...prev,
+      {
+        type,
+        modelId: type === 'publicai' ? 'swiss-ai/apertus-70b-instruct' : 'openai/gpt-4o-mini',
+        temperature: 0,
+        top_p: 1,
+        max_tokens: 8192,
+        id: newId
+      } as ModelConfig & { id: string }
+    ]);
+  };
+
+  const updateModelConfig = (index: number, key: keyof ModelConfig, value: any) => {
+    setConfiguredModels(prev => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], [key]: value };
+      return copy;
+    });
+  };
+
+  const removeModelConfig = (index: number) => {
+    setConfiguredModels(prev => prev.filter((_, i) => i !== index));
+  };
+
   const getModelsToRun = (): ModelConfig[] => {
-    return modelList.split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map(line => {
-        if (line.startsWith('local:')) {
-          return { type: 'local', modelId: line.replace('local:', '').trim() };
-        }
-        if (line.startsWith('publicai:')) {
-          return { type: 'publicai', modelId: line.replace('publicai:', '').trim() };
-        }
-        return { type: 'openrouter', modelId: line };
-      });
+    return configuredModels;
   };
 
   const runAll = async () => {
@@ -251,6 +513,32 @@ export default function PromptPlatform() {
     }
 
     const combos = generateCombinations();
+
+    const runName = `Lauf vom ${new Date().toLocaleString('de-CH')}`;
+    let dbRunId: number | null = null;
+
+    try {
+      const { data: runData, error: runError } = await supabase
+        .from('prompt_runs')
+        .insert({
+          name: runName,
+          meta_prompt_template: metaPrompt,
+          fragebogen: fragebogen,
+          role_variables: roleVariables,
+          active_roles: activeRoles,
+          models: models.map(m => m.modelId)
+        })
+        .select('id')
+        .single();
+
+      if (runData) {
+        dbRunId = runData.id;
+        setActiveRunId(runData.id);
+      }
+      if (runError) console.error("Error creating run in db:", runError);
+    } catch (e) {
+      console.error("Supabase insert error", e);
+    }
 
     // Initialize results state
     const newResults: any[] = [];
@@ -287,15 +575,82 @@ export default function PromptPlatform() {
       try {
         const res = await processPrompt(current.promptSent, current.modelConfig, apiKey); // Assuming current.promptConfig is correct
         setResults(prev => prev.map(r => r.id === current.id ? { ...r, status: 'success', response: res } : r));
+
+        if (dbRunId) {
+          supabase.from('prompt_run_results').insert({
+            run_id: dbRunId,
+            model_id: current.modelId,
+            combo: current.combo,
+            prompt_sent: current.promptSent,
+            response: res,
+            status: 'success'
+          }).then(({ error }) => { if (error) console.error("Error saving result", error); });
+        }
       } catch (err: any) {
         setResults(prev => prev.map(r => r.id === current.id ? { ...r, status: 'error', response: err.message || 'Error executing API' } : r));
+
+        if (dbRunId) {
+          supabase.from('prompt_run_results').insert({
+            run_id: dbRunId,
+            model_id: current.modelId,
+            combo: current.combo,
+            prompt_sent: current.promptSent,
+            response: err.message || 'Error executing API',
+            status: 'error'
+          }).then(({ error }) => { if (error) console.error("Error saving result", error); });
+        }
       }
     }
     setIsGenerating(false);
+    fetchHistory();
   };
 
   const handleRunAndSwitch = async () => {
     runAll();
+    setActiveTab('dashboard');
+  };
+
+  const loadHistoricRun = async (runId: number) => {
+    setActiveRunId(runId);
+    setIsGenerating(true);
+    const { data: runData } = await supabase
+      .from('prompt_runs')
+      .select('*')
+      .eq('id', runId)
+      .single();
+
+    if (runData) {
+      setMetaPrompt(runData.meta_prompt_template);
+      setFragebogen(runData.fragebogen);
+      setRoleVariables(runData.role_variables);
+      if (runData.active_roles) setActiveRoles(runData.active_roles);
+      if (runData.models) setModelList(runData.models.join('\n'));
+      // Wait to load results
+      const { data: resultsData } = await supabase
+        .from('prompt_run_results')
+        .select('*')
+        .eq('run_id', runId);
+
+      if (resultsData) {
+        setResults(resultsData.map((dbRes: any) => ({
+          id: dbRes.id.toString(),
+          promptSent: dbRes.prompt_sent,
+          response: dbRes.response,
+          status: dbRes.status,
+          combo: dbRes.combo,
+          modelId: dbRes.model_id,
+          modelConfig: { type: 'openrouter', modelId: dbRes.model_id }
+        })));
+      }
+
+      // Attempt to load settings from DB into configuredModels if they are saved in run
+      // This is a basic migration mapping, we don't have the full model settings per run in DB yet, but we load models.
+      if (runData.models) {
+        const oldModelList = runData.models.join('\n');
+        setModelList(oldModelList);
+      }
+    }
+    setIsGenerating(false);
     setActiveTab('dashboard');
   };
 
@@ -579,11 +934,25 @@ export default function PromptPlatform() {
             <FlaskConical className="w-4 h-4" /> Labor & Generator
           </Button>
           <Button
+            variant={activeTab === 'manual' ? 'secondary' : 'ghost'}
+            className="justify-start gap-3 w-full"
+            onClick={() => setActiveTab('manual')}
+          >
+            <Database className="w-4 h-4" /> Offline Datensatz
+          </Button>
+          <Button
             variant={activeTab === 'dashboard' ? 'secondary' : 'ghost'}
             className="justify-start gap-3 w-full"
             onClick={() => setActiveTab('dashboard')}
           >
             <LayoutDashboard className="w-4 h-4" /> Auswertung
+          </Button>
+          <Button
+            variant={activeTab === 'historie' ? 'secondary' : 'ghost'}
+            className="justify-start gap-3 w-full"
+            onClick={() => setActiveTab('historie')}
+          >
+            <History className="w-4 h-4" /> Historie
           </Button>
           <Button
             variant={activeTab === 'settings' ? 'secondary' : 'ghost'}
@@ -612,7 +981,7 @@ export default function PromptPlatform() {
                   <CardDescription>Trage hier deinen OpenRouter oder Public AI API-Key ein. Die verwendeten Cloud-Modelle erfordern diesen Schlüssel.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  <div className="space-y-2">
+                  <div className="space-y-4">
                     <Label htmlFor="apiKey">Globaler API Key (OpenRouter / PublicAI)</Label>
                     <Input
                       id="apiKey"
@@ -620,19 +989,10 @@ export default function PromptPlatform() {
                       placeholder="sk-or-v1-..."
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
-                      className="font-mono"
+                      className="font-mono text-lg py-5"
                     />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Aktive Modelle (Eins pro Zeile)</Label>
-                    <Textarea
-                      className="min-h-[120px] font-mono whitespace-pre-wrap text-sm"
-                      value={modelList}
-                      onChange={(e) => setModelList(e.target.value)}
-                      placeholder="publicai:swiss-ai/apertus-70b-instruct&#10;local:swiss-ai/Apertus-8B-Instruct-2509&#10;openai/gpt-4o-mini"
-                    />
-                    <p className="text-xs text-muted-foreground pt-1">
-                      Nutze Präfixe wie <kbd className="bg-muted px-1 rounded">local:</kbd> für lokale Modelle (MLX) oder <kbd className="bg-muted px-1 rounded">publicai:</kbd> für das Gateway. Ohne Präfix wird OpenRouter genutzt.
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Dieser API-Schlüssel wird für die Verwendung der OpenRouter Cloud Modelle herangezogen. Public AI Modelle werden (vorerst) von uns zur Verfügung gestellt. Du kannst die genauen Modelle für jeden Lauf im Generator-Tab auswählen.
                     </p>
                   </div>
                 </CardContent>
@@ -643,10 +1003,11 @@ export default function PromptPlatform() {
           {activeTab === 'generator' && (
             <div className="w-full pb-16">
               <Tabs defaultValue="prompts" className="w-full">
-                <TabsList className="mb-8 w-full flex h-14 p-1 bg-muted/50 rounded-xl">
-                  <TabsTrigger value="prompts" className="flex-1 h-full text-base font-semibold rounded-lg">1. Prompts</TabsTrigger>
-                  <TabsTrigger value="variables" className="flex-1 h-full text-base font-semibold rounded-lg">2. Variablen</TabsTrigger>
-                  <TabsTrigger value="generate" className="flex-1 h-full text-base font-semibold rounded-lg">3. Start & Vorschau</TabsTrigger>
+                <TabsList className="mb-8 w-full flex flex-wrap h-auto md:h-16 p-1 bg-muted/50 rounded-xl">
+                  <TabsTrigger value="prompts" className="flex-1 py-4 text-sm md:text-base font-semibold rounded-lg">1. Prompts</TabsTrigger>
+                  <TabsTrigger value="variables" className="flex-1 py-4 text-sm md:text-base font-semibold rounded-lg">2. Variablen</TabsTrigger>
+                  <TabsTrigger value="models" className="flex-1 py-4 text-sm md:text-base font-semibold rounded-lg">3. Modelle & Parameter</TabsTrigger>
+                  <TabsTrigger value="generate" className="flex-1 py-4 text-sm md:text-base font-semibold rounded-lg bg-primary/10 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">4. Start & Vorschau</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="prompts" className="w-full space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -793,6 +1154,105 @@ export default function PromptPlatform() {
                   </div>
                 </TabsContent>
 
+                <TabsContent value="models" className="w-full animate-in fade-in slide-in-from-bottom-2 duration-500">
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h2 className="text-2xl font-bold">Modelle für diesen Lauf</h2>
+                        <p className="text-muted-foreground">Wähle die KI-Modelle aus, die du gegeneinander antreten lassen willst. Stelle die Parameter gezielt ein.</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button onClick={() => addModelConfig('publicai')} variant="outline" className="gap-2 bg-blue-50/50 hover:bg-blue-100/50 border-blue-200">
+                          <PlusCircle className="w-4 h-4 text-blue-600" />
+                          Public AI Modell
+                        </Button>
+                        <Button onClick={() => addModelConfig('openrouter')} variant="outline" className="gap-2">
+                          <PlusCircle className="w-4 h-4" />
+                          OpenRouter Modell
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {configuredModels.map((model, idx) => (
+                        <Card key={(model as any).id || idx} className="relative shadow-sm border-primary/20">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-2 top-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => removeModelConfig(idx)}
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                          <CardHeader className="pb-4">
+                            <div className="flex items-center gap-2">
+                              <Badge variant={model.type === 'publicai' ? 'default' : 'secondary'} className="text-[10px] uppercase">
+                                {model.type}
+                              </Badge>
+                            </div>
+                            <CardTitle className="text-lg mt-2">
+                              {model.type === 'publicai' ? '🇨🇭 Swiss AI / Apertus' : 'OpenRouter Model'}
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            <div className="space-y-2">
+                              <Label className="text-xs uppercase font-semibold text-muted-foreground">Modell-ID</Label>
+                              {model.type === 'openrouter' ? (
+                                <Select value={model.modelId} onValueChange={(val) => updateModelConfig(idx, 'modelId', val)}>
+                                  <SelectTrigger className="w-full bg-card">
+                                    <SelectValue placeholder="Modell auswählen..." />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="openai/gpt-4o-mini">openai/gpt-4o-mini</SelectItem>
+                                    {model.modelId !== 'openai/gpt-4o-mini' && (
+                                      <SelectItem value={model.modelId}>{model.modelId}</SelectItem>
+                                    )}
+                                  </SelectContent>
+                                </Select>
+                              ) : model.type === 'publicai' ? (
+                                <Select value={model.modelId} onValueChange={(val) => updateModelConfig(idx, 'modelId', val)}>
+                                  <SelectTrigger className="w-full bg-card border-blue-200">
+                                    <SelectValue placeholder="Modell auswählen..." />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="swiss-ai/apertus-70b-instruct">swiss-ai/apertus-70b-instruct</SelectItem>
+                                    <SelectItem value="swiss-ai/apertus-8b-instruct">swiss-ai/apertus-8b-instruct</SelectItem>
+                                    {model.modelId !== 'swiss-ai/apertus-70b-instruct' && model.modelId !== 'swiss-ai/apertus-8b-instruct' && (
+                                      <SelectItem value={model.modelId}>{model.modelId}</SelectItem>
+                                    )}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <Input value={model.modelId} onChange={(e) => updateModelConfig(idx, 'modelId', e.target.value)} />
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label className="text-xs uppercase font-semibold text-muted-foreground">Temperature</Label>
+                                <Input type="number" step="0.1" min="0" max="2" value={model.temperature ?? ''} onChange={(e) => updateModelConfig(idx, 'temperature', parseFloat(e.target.value))} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label className="text-xs uppercase font-semibold text-muted-foreground">Top-P</Label>
+                                <Input type="number" step="0.05" min="0" max="1" value={model.top_p ?? ''} onChange={(e) => updateModelConfig(idx, 'top_p', parseFloat(e.target.value))} />
+                              </div>
+                              <div className="space-y-2 col-span-2">
+                                <Label className="text-xs uppercase font-semibold text-muted-foreground">Max Output Tokens</Label>
+                                <Input type="number" step="1" value={model.max_tokens ?? ''} onChange={(e) => updateModelConfig(idx, 'max_tokens', parseInt(e.target.value))} />
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+
+                      {configuredModels.length === 0 && (
+                        <div className="col-span-full text-center p-12 border-2 border-dashed rounded-xl bg-muted/10 text-muted-foreground">
+                          Keine Modelle konfiguriert. Bitte erstelle mindestens ein Modell, um den Fragebogen auszuwerten.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </TabsContent>
+
                 <TabsContent value="generate" className="w-full animate-in fade-in slide-in-from-bottom-2 duration-500">
                   <div className="space-y-6">
                     <Card className="border-primary/20 bg-primary/5">
@@ -867,6 +1327,283 @@ export default function PromptPlatform() {
             </div>
           )}
 
+          {activeTab === 'historie' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-16">
+              <div className="flex items-center justify-between pb-4">
+                <div>
+                  <h2 className="text-3xl font-bold tracking-tight">Historie</h2>
+                  <p className="text-muted-foreground">Alle bisherigen Läufe aus der Supabase Datenbank.</p>
+                </div>
+                <Button variant="outline" onClick={fetchHistory}>Neu Laden</Button>
+              </div>
+
+              <div className="grid gap-4">
+                {historicRuns.map(run => {
+                  const usedRoles: string[] = run.active_roles || [];
+                  const usedVars = run.role_variables || {};
+
+                  return (
+                    <Card key={run.id}>
+                      <CardHeader>
+                        <CardTitle>{run.name}</CardTitle>
+                        <CardDescription>
+                          Gestartet am: {new Date(run.created_at).toLocaleString('de-CH')}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-6 text-sm">
+                          {run.models && run.models.length > 0 && (
+                            <div className="space-y-2">
+                              <div className="font-semibold mb-1">Verwendete Modelle:</div>
+                              <div className="flex flex-wrap gap-2">
+                                {run.models.map((modelId: string) => (
+                                  <Badge variant="outline" key={modelId} className="font-medium text-[11px] border-primary/20 text-primary bg-primary/5">
+                                    {modelId}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {usedRoles.length > 0 ? (
+                            <div className="space-y-2">
+                              <div className="font-semibold mb-1">Aktive Rollen:</div>
+                              {usedRoles.map(role => {
+                                const roleVars = usedVars[role] || {};
+                                const simpleRole = role.includes('(') ? role.split('(')[0].trim() : role;
+                                const activeConfig = Object.entries(roleVars).filter(([k, v]) => v && v.toString().trim() !== '' && k !== 'Rolle');
+                                return (
+                                  <div key={role} className="p-3 bg-muted/30 border rounded-md">
+                                    <div className="font-semibold mb-2">{simpleRole}</div>
+                                    <div className="flex flex-wrap gap-2">
+                                      {activeConfig.length > 0 ? activeConfig.map(([k, v]) => (
+                                        <Badge variant="secondary" key={k} className="text-xs font-normal border-primary/20">
+                                          <span className="font-medium mr-1">{k}:</span>
+                                          <span className="text-muted-foreground">{String(v)}</span>
+                                        </Badge>
+                                      )) : (
+                                        <span className="text-muted-foreground text-xs italic">Keine Variablen definiert</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-muted-foreground italic">Rollendaten für diesen alten Tabellenlauf nicht gespeichert. Lade ihn, um die Details zu sehen.</div>
+                          )}
+                        </div>
+                      </CardContent>
+                      <CardFooter>
+                        <Button
+                          onClick={() => loadHistoricRun(run.id)}
+                          disabled={isGenerating}
+                        >
+                          Diesen Lauf für Auswertung laden
+                        </Button>
+                      </CardFooter>
+                    </Card>
+                  );
+                })}
+                {historicRuns.length === 0 && (
+                  <p className="text-muted-foreground">Noch keine Läufe vorhanden.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'manual' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-16">
+              <div className="flex items-center justify-between pb-4">
+                <div>
+                  <h2 className="text-3xl font-bold tracking-tight">Offline Datensatz</h2>
+                  <p className="text-muted-foreground">Lade Screenshots reeller Umfragen oder Testdaten hoch (z.B. Demoscope). Ein GPT-4 Vision Modell extrahiert die Profil-Variablen und Antworten und verknüpft sie optional mit deinen Läufen.</p>
+                </div>
+                <Button onClick={handleAddBatch} className="gap-2"><Plus className="w-4 h-4" /> Neuen Datensatz hinzufügen</Button>
+              </div>
+
+              {offlineBatches.length === 0 ? (
+                <div className="text-center p-12 text-muted-foreground border border-dashed rounded-lg bg-muted/20">
+                  Keine Datensätze vorhanden. Klicke auf &quot;Neuen Datensatz hinzufügen&quot;, um Screenshots hochzuladen.
+                </div>
+              ) : (
+                <div className="space-y-12">
+                  {offlineBatches.map((batch, idx) => {
+                    const tableData = getOfflineTableData(batch.id);
+                    return (
+                      <Card key={batch.id} className="border-primary/20 shadow-sm relative pt-4 overflow-hidden">
+                        <Button variant="ghost" size="icon" className="absolute right-4 top-4 text-destructive hover:bg-destructive/10 z-10" onClick={() => handleRemoveBatch(batch.id)}><Trash2 className="w-4 h-4" /></Button>
+
+                        <div className="px-6 pb-2 grid grid-cols-1 md:grid-cols-2 gap-6 relative z-0">
+                          <div className="space-y-3">
+                            <Label className="text-base font-semibold">Name / Quelle des Datensatzes</Label>
+                            <Input
+                              value={batch.modelName}
+                              onChange={(e) => setOfflineBatches(prev => prev.map(b => b.id === batch.id ? { ...b, modelName: e.target.value } : b))}
+                              placeholder="z.B. Demoscope"
+                              className="bg-muted/30 font-medium text-lg h-12"
+                            />
+                          </div>
+                          <div className="space-y-3">
+                            {/* Run management moved to bottom */}
+                          </div>
+                        </div>
+
+                        <div className="px-6 py-4 border-t bg-muted/5 flex items-center justify-between">
+                          <div>
+                            <h3 className="font-semibold text-lg">Zugehörige Datensätze (Personas)</h3>
+                            <p className="text-xs text-muted-foreground">Füge für jeden Datensatz (z.B. jede der 30 Personas) Bilder hinzu.</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2 justify-end">
+
+                            <Button onClick={() => handleAddBatchItem(batch.id)} size="sm" variant="outline" className="gap-2">
+                              <PlusCircle className="w-4 h-4" /> Weiteren Datensatz hinzufügen
+                            </Button>
+                          </div>
+                        </div>
+
+                        <CardContent className="space-y-6 pt-4 bg-muted/5">
+                          {batch.items.length === 0 ? (
+                            <div className="text-center py-8 text-muted-foreground text-sm border-2 border-dashed rounded-lg border-muted-foreground/20">
+                              Noch keine Datensätze angelegt.
+                            </div>
+                          ) : (
+                            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                              {batch.items.map((item, idxx) => (
+                                <div key={item.id} className="relative group bg-background rounded-xl p-4 shadow-sm border">
+                                  <Button variant="ghost" size="icon" className="absolute right-2 top-2 h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => handleRemoveBatchItem(batch.id, item.id)}>
+                                    <X className="w-3 h-3" />
+                                  </Button>
+                                  <div className="text-sm font-semibold mb-3">Datensatz #{idxx + 1}</div>
+
+                                  <div className="flex flex-wrap gap-2 mb-4">
+                                    {item.images.map((imgUrl, i) => (
+                                      <div key={i} className="relative w-16 h-16 rounded-md overflow-hidden border shadow-sm">
+                                        <img src={imgUrl} className="w-full h-full object-cover" alt="Preview" />
+                                        <button className="absolute inset-0 bg-black/60 opacity-0 hover:opacity-100 items-center justify-center flex text-white" onClick={() => removeImageFromItem(batch.id, item.id, i)}>
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    ))}
+                                    {item.images.length < 10 && (
+                                      <label className="w-16 h-16 flex flex-col items-center justify-center border border-dashed rounded-md cursor-pointer hover:bg-muted/50 text-muted-foreground">
+                                        <Upload className="w-4 h-4 mb-1" />
+                                        <input type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleImageUpload(batch.id, item.id, e)} />
+                                      </label>
+                                    )}
+                                  </div>
+
+                                  <Button size="sm" className="w-full" disabled={item.images.length === 0 || item.status === 'loading'} onClick={() => handleExtractBatchItem(batch.id, item.id)}>
+                                    {item.status === 'loading' ? 'Extrahiert...' : item.status === 'success' ? 'Erneut extrahieren' : 'Auswerten'}
+                                  </Button>
+
+                                  {item.status === 'success' && <Badge className="absolute bottom-2 right-2 bg-green-500 hover:bg-green-600">Erledigt</Badge>}
+                                  {item.status === 'error' && <Badge variant="destructive" className="absolute bottom-2 right-2">Fehler</Badge>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {tableData.rows.length > 0 && (
+                            <div className="mt-8 pt-6 border-t">
+                              <h3 className="font-semibold text-lg mb-4">Tabellarische Übersicht für {batch.modelName}</h3>
+                              <div className="overflow-x-auto rounded-lg border bg-background">
+                                <Table>
+                                  <TableHeader className="bg-muted/30">
+                                    <TableRow>
+                                      <TableHead className="font-bold whitespace-nowrap">Extrahierte Rolle / Profil</TableHead>
+                                      {tableData.columns.map(col => (
+                                        <TableHead key={col} className="text-center font-bold whitespace-nowrap">{col}</TableHead>
+                                      ))}
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    {tableData.rows.map((row, r_idx) => (
+                                      <TableRow key={r_idx}>
+                                        <TableCell className="font-medium">{row.Rolle}</TableCell>
+                                        {tableData.columns.map(col => (
+                                          <TableCell key={col} className="text-center">{row[col] ?? '-'}</TableCell>
+                                        ))}
+                                      </TableRow>
+                                    ))}
+                                  </TableBody>
+                                </Table>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="mt-8 pt-6 border-t">
+                            <h3 className="font-semibold text-lg mb-4">Datensatz in Tresor-Lauf verwalten</h3>
+                            <p className="text-sm text-muted-foreground mb-4">Wähle einen oder mehrere Läufe aus, in denen diese extrahierten Daten gespeichert werden sollen.</p>
+
+                            <div className="rounded-lg border bg-background overflow-hidden">
+                              <Table>
+                                <TableHeader className="bg-muted/30">
+                                  <TableRow>
+                                    <TableHead className="font-semibold w-[60%]">Ziel-Lauf (Tresor)</TableHead>
+                                    <TableHead className="font-semibold text-center w-[20%]">Status</TableHead>
+                                    <TableHead className="text-right w-[20%]"></TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {historicRuns.length === 0 && (
+                                    <TableRow>
+                                      <TableCell colSpan={3} className="text-center text-muted-foreground py-6">Keine Läufe vorhanden</TableCell>
+                                    </TableRow>
+                                  )}
+                                  {historicRuns.map(run => {
+                                    const isAdded = batch.targetRunIds && batch.targetRunIds.includes(run.id);
+                                    return (
+                                      <TableRow key={run.id} className={isAdded ? "bg-primary/5" : ""}>
+                                        <TableCell className="font-medium">
+                                          {run.name} <span className="text-muted-foreground font-normal ml-2">({new Date(run.created_at).toLocaleDateString('de-CH')})</span>
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                          {isAdded ? (
+                                            <Badge className="bg-green-500 hover:bg-green-600">Hinzugefügt</Badge>
+                                          ) : (
+                                            <Badge variant="outline" className="text-muted-foreground border-muted-foreground/30">Nicht hinzugefügt</Badge>
+                                          )}
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                          {isAdded ? (
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="text-destructive hover:text-destructive hover:bg-destructive/10 z-10"
+                                              onClick={() => handleRemoveBatchFromRun(batch.id, run.id)}
+                                            >
+                                              Wieder entfernen
+                                            </Button>
+                                          ) : (
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="border-primary text-primary hover:bg-primary/10 z-10"
+                                              onClick={() => handleSyncBatchToRun(batch.id, run.id)}
+                                              disabled={batch.items.filter(i => i.status === 'success' && i.result).length === 0}
+                                            >
+                                              Zu Lauf hinzufügen
+                                            </Button>
+                                          )}
+                                        </TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </div>
+
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === 'dashboard' && (
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-16">
 
@@ -875,14 +1612,23 @@ export default function PromptPlatform() {
                   <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
                   <p className="text-muted-foreground">Analytics und Ergebnisse deines Fragebogens (Live-Export jederzeit möglich)</p>
                 </div>
-                <Button variant="outline" className="gap-2" onClick={downloadExcel} disabled={filteredResultsAll.length === 0}>
-                  {isGenerating ? (
-                    <div className="w-4 h-4 rounded-full border-2 border-primary border-t-transparent flex animate-spin" />
-                  ) : (
+                <div className="flex gap-2">
+                  <Button variant="outline" className="gap-2 border-primary/20 hover:bg-primary/5" onClick={() => {
+                    setActiveTab('manual');
+                    const newId = Date.now().toString();
+                    setOfflineBatches(prev => [...prev, { id: newId, modelName: 'Demoscope', targetRunIds: [], items: [] }]);
+                    if (activeRunId) {
+                      setSelectedRunsForSync(prev => ({ ...prev, [newId]: activeRunId.toString() }));
+                    }
+                  }}>
+                    <Database className="w-4 h-4 text-primary" />
+                    + Offline-Datensatz
+                  </Button>
+                  <Button variant="default" className="gap-2" onClick={downloadExcel} disabled={filteredResultsAll.length === 0 || isGenerating}>
                     <Download className="w-4 h-4" />
-                  )}
-                  Excel Exportieren
-                </Button>
+                    Export
+                  </Button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
