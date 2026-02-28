@@ -45,60 +45,75 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import * as XLSX from 'xlsx';
 
 function parseLikertScores(responseText: string): Record<string, number> {
-  const scores: Record<string, number> = {};
+  let bestScores: Record<string, number> = {};
+  if (!responseText) return bestScores;
 
-  // 0. Try to parse JSON output first
+  let jsonString = responseText;
+  const jsonBlockMatch = responseText.match(/\`\`\`(?:json)?\s*([\s\S]*?)\s*\`\`\`/);
+  if (jsonBlockMatch) {
+    jsonString = jsonBlockMatch[1];
+  } else {
+    const firstBrace = responseText.indexOf('{');
+    const lastBrace = responseText.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      jsonString = responseText.substring(firstBrace, lastBrace + 1);
+    }
+  }
+
+  let jsonSuccess = false;
   try {
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      // Extract array from typical keys models might use
-      const bewertungen = parsed.bewertungen || parsed.Bewertungen || parsed.results || parsed.fragen || (Array.isArray(parsed) ? parsed : []);
-      if (Array.isArray(bewertungen)) {
-        for (const b of bewertungen) {
-          const fn = b.frage ?? b.Frage ?? b.id ?? b.question;
-          const sc = b.score ?? b.Score ?? b.bewertung ?? b.Bewertung ?? b.wert;
-          if (fn !== undefined && sc !== undefined) {
-            const frageNum = String(fn).replace(/[^\d]/g, '');
-            if (frageNum) {
-              scores[`Frage ${frageNum}`] = Number(sc);
-            }
+    const parsed = JSON.parse(jsonString);
+    const bewertungen = parsed.bewertungen || parsed.Bewertungen || parsed.results || parsed.fragen || (Array.isArray(parsed) ? parsed : null);
+    if (Array.isArray(bewertungen) && bewertungen.length > 0) {
+      for (const b of bewertungen) {
+        const fn = b.frage ?? b.Frage ?? b.id ?? b.question;
+        let sc = b.score ?? b.Score ?? b.bewertung ?? b.Bewertung ?? b.wert;
+        if (fn !== undefined && sc !== undefined) {
+          const frageNum = String(fn).replace(/[^\d]/g, '');
+          const scMatch = String(sc).match(/([1-7])/);
+          if (frageNum && scMatch) {
+            bestScores[`Frage ${frageNum}`] = Number(scMatch[1]);
+            jsonSuccess = true;
           }
         }
-        if (Object.keys(scores).length > 0) return scores;
+      }
+    } else if (typeof parsed === 'object' && parsed !== null) {
+      for (const [k, v] of Object.entries(parsed)) {
+        if (/frage/i.test(k) || !isNaN(Number(k.replace(/[^\d]/g, '')))) {
+          const frageNum = k.replace(/[^\d]/g, '');
+          const scMatch = String(v).match(/([1-7])/);
+          if (frageNum && scMatch) {
+            bestScores[`Frage ${frageNum}`] = Number(scMatch[1]);
+            jsonSuccess = true;
+          }
+        }
       }
     }
-  } catch (e) {
-    // Silently fall through to regex if JSON parsing fails
+  } catch (e) { }
+
+  if (jsonSuccess && Object.keys(bestScores).length > 0) {
+    return bestScores;
   }
 
-  // 1. JSON-like regex fallback (for broken JSON or unescaped characters breaking JSON.parse)
-  // Looks for: "frage": 1 ... "score": 5
-  let regex = /"frage"\s*:\s*(\d+)[^}]*?"score"\s*:\s*([1-7])/gi;
-  let match;
-  let hasMatches = false;
+  let regexs = [
+    /"frage"\s*:\s*.*?(\d+).*?"score"\s*:\s*.*?([1-7])/gi,
+    /\[?\*?\*?Frage\s*(\d+)\*?\*?\s*\]?[\s:=-]+\[?\*?\*?([1-7])\*?\*?\]?/gi,
+    /Frage\s*(\d+).*?(?:score|bewertung|wert|punkte|antwort).*?([1-7])/gi,
+    /Frage\s*(\d+)[\s\S]{1,50}?(?<!\d)([1-7])(?!\d)/gi
+  ];
 
-  while ((match = regex.exec(responseText)) !== null) {
-    scores[`Frage ${match[1]}`] = parseInt(match[2], 10);
-    hasMatches = true;
-  }
-  if (hasMatches) return scores;
-
-  // 2. Strict regex trying to match structures like [Frage 1: 5], **Frage 1**: 5, [Frage 1] - 5
-  regex = /\[?\*?\*?Frage\s*(\d+)\*?\*?\s*\]?[\s:=-]+\[?\*?\*?([1-7])\*?\*?\]?/gi;
-  while ((match = regex.exec(responseText)) !== null) {
-    scores[`Frage ${match[1]}`] = parseInt(match[2], 10);
-    hasMatches = true;
-  }
-  if (hasMatches) return scores;
-
-  // 3. Fallback: Just look for "Frage X" and pick the first 1-7 digit that follows shortly after
-  regex = /Frage\s*(\d+)[^\d]{1,50}?([1-7])/gi;
-  while ((match = regex.exec(responseText)) !== null) {
-    scores[`Frage ${match[1]}`] = parseInt(match[2], 10);
+  for (let r of regexs) {
+    let currentScores: Record<string, number> = {};
+    let match;
+    while ((match = r.exec(responseText)) !== null) {
+      currentScores[`Frage ${match[1]}`] = parseInt(match[2], 10);
+    }
+    if (Object.keys(currentScores).length > Object.keys(bestScores).length) {
+      bestScores = currentScores;
+    }
   }
 
-  return scores;
+  return bestScores;
 }
 
 const PROFILE_VARIABLES = [
@@ -129,7 +144,7 @@ export default function PromptPlatform() {
   const [dashboardRoleFilter, setDashboardRoleFilter] = useState<string>('Alle');
   const [apiKey, setApiKey] = useLocalStorage('pp_apiKey', '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');
   const [modelList, setModelList] = useLocalStorage('pp_modelList', 'publicai:swiss-ai/apertus-70b-instruct\nopenai/gpt-4o-mini');
-  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v6', 'Versetze dich in die Rolle einer Person mit exakt folgendem Profil:\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Besonderheiten: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\nBitte bearbeite den untenstehenden Fragebogen strikt aus der Perspektive dieser Person.\nBewerte jede Frage/Aussage auf einer Likert-Skala von 1 bis 7 (1 = Stimme überhaupt nicht zu / Finde ich gar nicht gut, 7 = Stimme voll und ganz zu / Finde ich sehr gut).\n\nWICHTIG: Antworte ZWINGEND in einem validen JSON-Format. Nutze exakt dieses Format:\n{\n  "bewertungen": [\n    {\n      "frage": 1,\n      "score": 5,\n      "begruendung": "kurze Begründung"\n    },\n    {\n      "frage": 2,\n      "score": 3,\n      "begruendung": "..."\n    }\n  ]\n}\nGib niemals etwas anderes als das JSON aus!\n\nFragebogen:\n{{Fragebogen}}\n\nDeine JSON-Antwort:');
+  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v7', 'Versetze dich in die Rolle einer Person mit exakt folgendem Profil:\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Besonderheiten: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\nBitte bearbeite den untenstehenden Fragebogen strikt aus der Perspektive dieser Person.\nBewerte jede Frage/Aussage auf einer Likert-Skala von 1 bis 7 (1 = Stimme überhaupt nicht zu / Finde ich gar nicht gut, 7 = Stimme voll und ganz zu / Finde ich sehr gut).\n\nWICHTIG: Antworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown (kein ```json). Nutze exakt dieses Format:\n{\n  "bewertungen": [\n    {\n      "frage": 1,\n      "score": 5,\n      "begruendung": "kurze Begründung"\n    },\n    {\n      "frage": 2,\n      "score": 3,\n      "begruendung": "..."\n    }\n  ]\n}\n\nFragebogen:\n{{Fragebogen}}\n\nDeine JSON-Antwort:');
   const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen', 'Frage 1: Wie gefällt dir die Idee einer App, die deine täglichen Einkäufe automatisch und basierend auf deinen Routinen an deine Haustür liefert?\nFrage 2: Welche Bedenken hättest du bei der Nutzung von KI-gestützter Finanzberatung für deine privaten Ersparnisse?\nFrage 3: Wenn dir dein Arbeitgeber ein rein virtuelles Büro im Metaverse als hybride Alternative zum Home-Office anbieten würde, wie wäre deine ehrliche Meinung dazu?');
 
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
@@ -297,61 +312,105 @@ export default function PromptPlatform() {
   const filteredResultsValid = filteredResultsAll.filter(r => r.status === 'success' && r.response);
 
   const downloadExcel = () => {
-    if (filteredResultsAll.length === 0) return;
+    try {
+      if (filteredResultsAll.length === 0) return;
 
-    // Sheet 1: Raw Data
-    const rawData = filteredResultsAll.map(r => {
-      const rowItem: any = {
-        ID: r.id,
-        Status: r.status,
-        Model: r.modelId,
+      const wb = XLSX.utils.book_new();
+
+      // Find all unique questions across all responses to ensure consistent column ordering
+      const allFragen = new Set<string>();
+      filteredResultsAll.forEach(r => {
+        const scores = parseLikertScores(r.response);
+        Object.keys(scores).forEach(f => allFragen.add(f));
+      });
+      const sortQuestions = (a: string, b: string) => {
+        const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
+        const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
+        return numA - numB;
       };
-      variables.forEach(v => {
-        rowItem[v] = r.combo[v] || '';
-      });
-      rowItem['Prompt Sent'] = r.promptSent;
-      rowItem['Response'] = r.response;
-      return rowItem;
-    });
-    const ws1 = XLSX.utils.json_to_sheet(rawData);
+      const sortedFragen = Array.from(allFragen).sort(sortQuestions);
 
-    // Sheet 2: Aggregated Metrics
-    const tableData = getTableData();
-    const aggRows = tableData.rows.map(row => {
-      const rowItem: any = {
-        Rolle: row.role,
-        Modell: row.modelId
-      };
-      tableData.columns.forEach(col => {
-        const val = row[col];
-        rowItem[col] = val !== undefined ? Number(val) : null;
-      });
-      return rowItem;
-    });
-    const ws2 = XLSX.utils.json_to_sheet(aggRows);
+      // Sheet 1: Raw Data
+      const rawData = filteredResultsAll.map(r => {
+        const rowItem: any = {
+          ID: r.id,
+          Status: r.status,
+          Model: r.modelId,
+        };
+        variables.forEach(v => {
+          rowItem[v] = r.combo[v] || '';
+        });
 
-    // Sheet 3: Graph Data (Easy Charting in Excel)
-    const aggData = getAggregatedData();
-    const chartData = aggData.fragen.map(frage => {
-      const dataPoint: any = { 'Frage / Metrik': frage };
-      Object.keys(aggData.stats).forEach(modelId => {
-        const stat = aggData.stats[modelId][frage];
-        dataPoint[modelId] = stat ? Number((stat.sum / stat.count).toFixed(2)) : null;
-      });
-      return dataPoint;
-    });
-    const ws3 = XLSX.utils.json_to_sheet(chartData);
+        // Parse scores and map them to their specific columns
+        const scores = parseLikertScores(r.response);
+        sortedFragen.forEach(f => {
+          rowItem[f] = scores[f] !== undefined ? scores[f] : '';
+        });
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws1, "1_Einzelansicht");
-    if (aggRows.length > 0) {
-      XLSX.utils.book_append_sheet(wb, ws2, "2_Tabellarische_Uebersicht");
+        rowItem['Prompt Sent'] = r.promptSent;
+        rowItem['Response'] = r.response;
+        return rowItem;
+      });
+      const ws1 = XLSX.utils.json_to_sheet(rawData);
+      XLSX.utils.book_append_sheet(wb, ws1, "1_Einzelansicht");
+
+      // Sheet 2: Aggregated Metrics
+      const tableData = getTableData();
+      if (tableData.rows.length > 0) {
+        const aggRows = tableData.rows.map(row => {
+          const rowItem: any = {
+            Rolle: row.role,
+            Profil: row.profile,
+            Modell: row.modelId
+          };
+          tableData.columns.forEach(col => {
+            const val = row[col];
+            rowItem[col] = val !== undefined ? Number(val) : null;
+          });
+          return rowItem;
+        });
+        const ws2 = XLSX.utils.json_to_sheet(aggRows);
+        XLSX.utils.book_append_sheet(wb, ws2, "2_Tabellarische_Uebersicht");
+      }
+
+      // Sheet 3: Graph Data (Easy Charting in Excel)
+      const aggData = getAggregatedData();
+      if (aggData.fragen.length > 0) {
+        const chartData = aggData.fragen.map(frage => {
+          const dataPoint: any = { 'Frage / Metrik': frage };
+          Object.keys(aggData.stats).forEach(modelId => {
+            const stat = aggData.stats[modelId][frage];
+            dataPoint[modelId] = stat ? Number((stat.sum / stat.count).toFixed(2)) : null;
+          });
+          return dataPoint;
+        });
+        const ws3 = XLSX.utils.json_to_sheet(chartData);
+        XLSX.utils.book_append_sheet(wb, ws3, "3_Graphik");
+      }
+
+      // Sheet 4: Durchschnitte per Rolle & Modell
+      const averagesData = getAveragesTableData();
+      if (averagesData.rows.length > 0) {
+        const avgRows = averagesData.rows.map(row => {
+          const rowItem: any = {
+            Rolle: row.role,
+            Modell: row.modelId
+          };
+          averagesData.columns.forEach(col => {
+            const val = row[col];
+            rowItem[col] = val !== undefined ? Number(val) : null;
+          });
+          return rowItem;
+        });
+        const ws4 = XLSX.utils.json_to_sheet(avgRows);
+        XLSX.utils.book_append_sheet(wb, ws4, "4_Durchschnitte_Modelle");
+      }
+
+      XLSX.writeFile(wb, `prompt_results_${Date.now()}.xlsx`);
+    } catch (err: any) {
+      console.error(err);
+      alert("Fehler beim Excel-Export: " + err.message);
     }
-    if (chartData.length > 0) {
-      XLSX.utils.book_append_sheet(wb, ws3, "3_Graphik");
-    }
-
-    XLSX.writeFile(wb, `prompt_results_${Date.now()}.xlsx`);
   };
 
   const getAggregatedData = () => {
@@ -373,13 +432,70 @@ export default function PromptPlatform() {
       });
     });
 
+    const sortQuestions = (a: string, b: string) => {
+      const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
+      const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
+      return numA - numB;
+    };
+
     return {
       stats: groupStats,
-      fragen: Array.from(allFragen).sort()
+      fragen: Array.from(allFragen).sort(sortQuestions)
     };
   };
 
   const getTableData = () => {
+    const tableRows: any[] = [];
+    const allFragenForTable = new Set<string>();
+    const grouped: any = {};
+
+    filteredResultsValid.forEach(r => {
+      const scores = parseLikertScores(r.response);
+      const roleName = r.combo['Rolle'] || 'Keine Rolle';
+      const simplifyRole = roleName.includes('(') ? roleName.split('(')[0].trim() : roleName;
+      const modelId = r.modelId;
+
+      const profileKeys = Object.entries(r.combo)
+        .filter(([k]) => k !== 'Rolle')
+        .map(([k, v]) => v)
+        .filter(Boolean)
+        .join(', ');
+
+      const key = `${r.id}_${simplifyRole}_${modelId}`;
+
+      if (!grouped[key]) {
+        grouped[key] = { role: simplifyRole, profile: profileKeys, modelId: modelId, scores: {}, counts: {} };
+      }
+
+      Object.entries(scores).forEach(([frage, score]) => {
+        allFragenForTable.add(frage);
+        if (!grouped[key].scores[frage]) {
+          grouped[key].scores[frage] = 0;
+          grouped[key].counts[frage] = 0;
+        }
+        grouped[key].scores[frage] += score;
+        grouped[key].counts[frage] += 1;
+      });
+    });
+
+    Object.values(grouped).forEach((g: any) => {
+      const finalRow: any = { role: g.role, profile: g.profile, modelId: g.modelId };
+      Object.entries(g.scores).forEach(([frage, sum]: [string, any]) => {
+        finalRow[frage] = (sum / g.counts[frage]).toFixed(2);
+      });
+      tableRows.push(finalRow);
+    });
+
+    const sortQuestions = (a: string, b: string) => {
+      const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
+      const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
+      return numA - numB;
+    };
+
+    return { rows: tableRows, columns: Array.from(allFragenForTable).sort(sortQuestions) };
+  };
+
+  const getAveragesTableData = () => {
     const tableRows: any[] = [];
     const allFragenForTable = new Set<string>();
     const grouped: any = {};
@@ -415,7 +531,13 @@ export default function PromptPlatform() {
       tableRows.push(finalRow);
     });
 
-    return { rows: tableRows, columns: Array.from(allFragenForTable).sort() };
+    const sortQuestions = (a: string, b: string) => {
+      const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
+      const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
+      return numA - numB;
+    };
+
+    return { rows: tableRows, columns: Array.from(allFragenForTable).sort(sortQuestions) };
   };
 
   const aggData = getAggregatedData();
@@ -837,16 +959,17 @@ export default function PromptPlatform() {
               {tableData.rows.length > 0 && (
                 <Card className="shadow-sm">
                   <CardHeader>
-                    <CardTitle>Tabellarische Übersicht</CardTitle>
-                    <CardDescription>Daten-Matrix aller Likert-Werte aufgeschlüsselt nach Rolle und Modell (Durchschnitt aus {currentFilterN} Werten).</CardDescription>
+                    <CardTitle>Tabellarische Übersicht (Einzel-Profile)</CardTitle>
+                    <CardDescription>Daten-Matrix aller Likert-Werte aufgeschlüsselt nach Rolle, Profil-Variablen und Modell.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="overflow-x-auto rounded-md border">
                       <Table>
                         <TableHeader>
                           <TableRow className="bg-muted/50">
-                            <TableHead className="w-[200px] font-semibold">Rolle</TableHead>
-                            <TableHead className="w-[200px] font-semibold">Modell</TableHead>
+                            <TableHead className="w-[150px] font-semibold">Rolle</TableHead>
+                            <TableHead className="w-[200px] font-semibold">Profil</TableHead>
+                            <TableHead className="w-[150px] font-semibold">Modell</TableHead>
                             {tableData.columns.map(col => (
                               <TableHead key={col} className="text-center whitespace-nowrap font-semibold px-4">{col}</TableHead>
                             ))}
@@ -856,6 +979,7 @@ export default function PromptPlatform() {
                           {tableData.rows.sort((a, b) => a.role.localeCompare(b.role) || a.modelId.localeCompare(b.modelId)).map((row, idx) => (
                             <TableRow key={idx} className="hover:bg-muted/50 transition-colors">
                               <TableCell className="font-medium align-middle">{row.role}</TableCell>
+                              <TableCell className="align-middle text-xs text-muted-foreground">{row.profile || '-'}</TableCell>
                               <TableCell className="align-middle">
                                 <Badge variant="outline" className="font-medium text-[10px] border-primary/20 text-primary bg-primary/5">{row.modelId}</Badge>
                               </TableCell>
