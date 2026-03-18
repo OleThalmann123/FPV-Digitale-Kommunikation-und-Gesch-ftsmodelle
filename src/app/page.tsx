@@ -187,23 +187,55 @@ F17. «Ein direkter Praxistransfer in meinen Arbeitsalltag ist für mich ein ent
 F18. Haben Sie in den letzten 3 Jahren aktiv nach CAS-Weiterbildungen im Bereich Marketing/Digital/Kommunikation gesucht? Ja, konkret evaluiert / Ja, grob recherchiert / Nein, aber geplant / Nein, kein Bedarf
 F20. KONTROLLFRAGE (Selbstauskunft / Straight-liner-Check) Wie haben Sie diesen Fragebogen ausgefüllt? Jede Frage sorgfältig gelesen und ehrlich beantwortet / Die meisten gelesen, einige überflogen / Viele Fragen nur oberflächlich beantwortet / Den Fragebogen hauptsächlich schnell durchgeklickt`);
 
+  const roleEigenschaften: Record<string, string> = {
+    'CEM (Customer Experience Manager)': `Branchenwissen: Customer Experience, Customer Service, Marketing / Customer Relations
+Tools & Technologien: Microsoft Office / Shopify, Microsoft PowerPoint / Marketing Automation (HubSpot/Klaviyo), Microsoft Excel / Google Ads / Google Marketing Suite
+Soziale Kompetenz: Teamwork / Structured working style, Leadership / Teamwork / Collaboration, Customer Service / Organizational skills
+Weitere Kenntnisse: Project Management / Customer Journey / UX, Event Management / Campaign Management, Analytical Skills / Präsentationsskills`,
+
+    'SMM (Social Media Manager)': `Branchenwissen: Digital Marketing, Marketing, E-Commerce
+Tools & Technologien: Microsoft Office / Analytics & BI (Tableau/Looker/Power BI), Google Analytics / CMS (WordPress/Typo3/other), Microsoft Excel / Google Ads / Google Marketing Suite
+Soziale Kompetenz: Teamwork / Teamwork / Collaboration, Communication / Analytical thinking, Project Management / Proactive / autonomous working style
+Weitere Kenntnisse: Project Management / Campaign Management, Online Marketing / KPI / Analytics & Reporting, Social Media / Performance Marketing`,
+
+    'DMM (Digital Manager)': `Branchenwissen: Social Media Marketing / Content Creation, Digital Marketing / Kommunikation, Social Media / Partnerschaften
+Tools & Technologien: Microsoft Office / Adobe Creative Suite, Microsoft PowerPoint / Social Media Platforms (FB/TikTok/IG), Microsoft Word / CMS / Typo3
+Soziale Kompetenz: Teamwork / Teamwork / Collaboration, Leadership / Structured working style, Communication / Proactive / autonomous
+Weitere Kenntnisse: Social Media / Social Media Strategy, Sales / Content Strategy & Planning, Project Management / Video & Photo Production`,
+
+    'Growth Manager': `Branchenwissen: Digital Marketing / Website Development, SEO / Digital Marketing, Web Design / Website security
+Tools & Technologien: WordPress / CMS (WordPress/Typo3/other), HTML / HTML / CSS, Google Analytics / Dev tools (Git/Docker/CI/CD)
+Soziale Kompetenz: Teamwork / Teamwork / Collaboration, Communication / Technical leadership, Project Management / Cross-functional collaboration
+Weitere Kenntnisse: Social Media / Technical Architecture / DevOps, SEO / Website Operations / Content Publishing, Marketing Strategy / Customer Journey / UX`,
+
+    'Kommunikation Manager': `Branchenwissen: Event Management / Kommunikation, Digital Marketing / Strategische Kommunikationsplanung, Corporate Communications / Stakeholderkommunikation
+Tools & Technologien: Microsoft Office / MS 365 / Content Management Systems, Adobe InDesign / Social Media / Monitoring tools, Adobe Photoshop / Digitale Kanäle / Content Formate
+Soziale Kompetenz: Teamwork / Communication, Social Media / Teamwork / Collaboration, Communication / Strategic thinking
+Weitere Kenntnisse: Project Management / Strategic Communications, Marketing Strategy / Project Management, SEO / Leadership`,
+
+    'Webseiten Manager': `Branchenwissen: Marketing / Digital Media and publishing, Customer Service / Fintec, Blockchain, stablecoin, FMCG / AI Governance and Compliance
+Tools & Technologien: Microsoft Office / Google Analytics / GA4, Microsoft Excel / Meta Ads / Google Ads, Microsoft PowerPoint / Marketing Automation platforms
+Soziale Kompetenz: Leadership / Data-driven mindset, Teamwork / Strategic thinking, Communication / Cross-functional collaboration
+Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Marketing Strategy / Campaign Management, Campaign Management / Performance Marketing`
+  };
+
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
     acc[role] = {
       Geschlecht: 'Männlich, Weiblich',
       Alter: '30',
       Nationalitaet: 'Schweiz',
-      Haushalt: 'Zwei Erwachsene mit Kindern, Single',
+      Haushalt: '2 Personen 1 Kind',
       Ausbildung: 'Master, Bachelor',
       Berufserfahrung: '3 Jahre',
       Wohnsitzland: 'Schweiz',
-      Postleitzahl: '8000',
-      Avatar_Eigenschaften_und_Praeferenzen: ''
+      Postleitzahl: '9000',
+      Avatar_Eigenschaften_und_Praeferenzen: roleEigenschaften[role] || ''
     };
     return acc;
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v10', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v17', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
@@ -489,8 +521,12 @@ F20. KONTROLLFRAGE (Selbstauskunft / Straight-liner-Check) Wie haben Sie diesen 
 
       for (const v of varsWithoutRole) {
         const val = roleVars[v] || '';
-        const split = val.split(',').map(s => s.trim()).filter(s => s.length > 0);
-        parsedOptions[v] = split.length > 0 ? split : [''];
+        if (v === 'Avatar_Eigenschaften_und_Praeferenzen') {
+          parsedOptions[v] = [val];
+        } else {
+          const split = val.split(',').map(s => s.trim()).filter(s => s.length > 0);
+          parsedOptions[v] = split.length > 0 ? split : [''];
+        }
       }
 
       const roleCombos: Record<string, string>[] = [];
@@ -618,8 +654,8 @@ F20. KONTROLLFRAGE (Selbstauskunft / Straight-liner-Check) Wie haben Sie diesen 
 
     setResults(newResults);
 
-    // Process in batches of 5 to avoid aggressive rate-limiting but prevent sequential blocking
-    const batchSize = 5;
+    // Process in batches of 2 to avoid aggressive rate-limiting but prevent sequential blocking
+    const batchSize = 2;
     for (let i = 0; i < newResults.length; i += batchSize) {
       const batch = newResults.slice(i, i + batchSize);
       
@@ -1208,28 +1244,33 @@ F20. KONTROLLFRAGE (Selbstauskunft / Straight-liner-Check) Wie haben Sie diesen 
                               return (
                                 <TabsContent key={role} value={role} className="space-y-6 animate-in fade-in">
                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-6 bg-card">
-                                    {variables.filter(v => v !== 'Rolle' && v !== 'Avatar_Eigenschaften_und_Praeferenzen').map(v => (
-                                      <div key={v} className="space-y-3">
-                                        <Label className="text-base font-semibold text-foreground/80">{v}</Label>
-                                        <Input
-                                          value={roleVars[v] || ''}
-                                          onChange={(e) => updateRoleVariable(role, v, e.target.value)}
-                                          placeholder="Option 1, Option 2, Option 3..."
-                                          className="text-base py-5 bg-muted/20"
-                                        />
-                                      </div>
-                                    ))}
+                                    {variables.filter(v => v !== 'Rolle' && v !== 'Avatar_Eigenschaften_und_Praeferenzen').map(v => {
+                                      const isFixed = ['Alter', 'Haushalt', 'Berufserfahrung', 'Wohnsitzland', 'Postleitzahl', 'Nationalitaet'].includes(v);
+                                      return (
+                                        <div key={v} className="space-y-3">
+                                          <Label className="text-base font-semibold text-foreground/80">{v}</Label>
+                                          <Input
+                                            value={roleVars[v] || ''}
+                                            onChange={(e) => updateRoleVariable(role, v, e.target.value)}
+                                            placeholder="Option 1, Option 2, Option 3..."
+                                            className={`text-base py-5 ${isFixed ? 'bg-muted border-muted/50 text-muted-foreground cursor-not-allowed font-medium' : 'bg-muted/20'}`}
+                                            disabled={isFixed}
+                                            readOnly={isFixed}
+                                          />
+                                        </div>
+                                      );
+                                    })}
 
                                     <div className="space-y-3 md:col-span-2 pt-2">
                                       <Label className="text-base font-semibold text-foreground/80 flex items-center gap-2">
                                         Avatar-Eigenschaften und Präferenzen
                                         <Info className="w-4 h-4 text-muted-foreground" />
                                       </Label>
-                                      <Input
+                                      <Textarea
                                         value={roleVars['Avatar_Eigenschaften_und_Praeferenzen'] || ''}
                                         onChange={(e) => updateRoleVariable(role, 'Avatar_Eigenschaften_und_Praeferenzen', e.target.value)}
                                         placeholder="Z.b: Mind. 3 Jahre Arbeitserfahrung..."
-                                        className="text-base py-5 bg-muted/20"
+                                        className="text-sm py-4 bg-muted/20 min-h-[140px] resize-y"
                                       />
                                       <p className="text-xs text-muted-foreground">Nutze dies für exakt definierte Eigenschaften, die fest zu dieser Persona gehören.</p>
                                     </div>
