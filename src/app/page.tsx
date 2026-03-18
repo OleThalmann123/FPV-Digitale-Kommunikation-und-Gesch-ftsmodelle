@@ -34,7 +34,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { processPrompt, ModelConfig, extractFromImages } from './actions';
+import { processPrompt, ModelConfig } from './actions';
+import { extractFromImages } from './client-actions';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { LayoutDashboard, FlaskConical, Download, Settings, Key, Info, History, Image as ImageIcon, Upload, Plus, Trash2, X, PlusCircle, Database } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -45,8 +46,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import * as XLSX from 'xlsx';
 import { supabase } from '@/lib/supabase';
 
-function parseLikertScores(responseText: string): Record<string, number> {
-  let bestScores: Record<string, number> = {};
+function parseAnswers(responseText: string): Record<string, string | number> {
+  let bestScores: Record<string, string | number> = {};
   if (!responseText) return bestScores;
 
   let jsonString = responseText;
@@ -68,23 +69,34 @@ function parseLikertScores(responseText: string): Record<string, number> {
     if (Array.isArray(bewertungen) && bewertungen.length > 0) {
       for (const b of bewertungen) {
         const fn = b.frage ?? b.Frage ?? b.id ?? b.question;
-        let sc = b.score ?? b.Score ?? b.bewertung ?? b.Bewertung ?? b.wert;
+        let sc = b.score ?? b.Score ?? b.bewertung ?? b.Bewertung ?? b.wert ?? b.antwort ?? b.Antwort;
         if (fn !== undefined && sc !== undefined) {
           const frageNum = String(fn).replace(/[^\d]/g, '');
-          const scMatch = String(sc).match(/([1-7])/);
-          if (frageNum && scMatch) {
-            bestScores[`Frage ${frageNum}`] = Number(scMatch[1]);
+          if (frageNum) {
+            const scStr = String(sc).trim();
+            const scMatch = scStr.match(/^([1-7])$/);
+            if (scMatch) {
+              bestScores[`F${frageNum}`] = Number(scMatch[1]);
+            } else {
+              bestScores[`F${frageNum}`] = scStr;
+            }
             jsonSuccess = true;
           }
         }
       }
     } else if (typeof parsed === 'object' && parsed !== null) {
-      for (const [k, v] of Object.entries(parsed)) {
-        if (/frage/i.test(k) || !isNaN(Number(k.replace(/[^\d]/g, '')))) {
+      const targetObj = parsed.antworten || parsed;
+      for (const [k, v] of Object.entries(targetObj)) {
+        if (/f(?:rage)?_?\s*\d+/i.test(k) || !isNaN(Number(k.replace(/[^\d]/g, '')))) {
           const frageNum = k.replace(/[^\d]/g, '');
-          const scMatch = String(v).match(/([1-7])/);
-          if (frageNum && scMatch) {
-            bestScores[`Frage ${frageNum}`] = Number(scMatch[1]);
+          if (frageNum) {
+            const scStr = String(v).trim();
+            const scMatch = scStr.match(/^([1-7])$/);
+            if (scMatch) {
+              bestScores[`F${frageNum}`] = Number(scMatch[1]);
+            } else {
+              bestScores[`F${frageNum}`] = scStr;
+            }
             jsonSuccess = true;
           }
         }
@@ -97,17 +109,18 @@ function parseLikertScores(responseText: string): Record<string, number> {
   }
 
   let regexs = [
-    /"frage"\s*:\s*.*?(\d+).*?"score"\s*:\s*.*?([1-7])/gi,
-    /\[?\*?\*?Frage\s*(\d+)\*?\*?\s*\]?[\s:=-]+\[?\*?\*?([1-7])\*?\*?\]?/gi,
-    /Frage\s*(\d+).*?(?:score|bewertung|wert|punkte|antwort).*?([1-7])/gi,
-    /Frage\s*(\d+)[\s\S]{1,50}?(?<!\d)([1-7])(?!\d)/gi
+    /"frage"\s*:\s*.*?(\d+).*?"(?:antwort|score)"\s*:\s*"?([^"}]+)"?/gi,
+    /\[?\*?\*?Frage\s*(\d+)\*?\*?\s*\]?[\s:=-]+\[?\*?\*?([^\n\*\]]+)\*?\*?\]?/gi,
+    /Frage\s*(\d+).*?(?:antwort|score|bewertung).*?([^\n]+)/gi
   ];
 
   for (let r of regexs) {
-    let currentScores: Record<string, number> = {};
+    let currentScores: Record<string, string | number> = {};
     let match;
     while ((match = r.exec(responseText)) !== null) {
-      currentScores[`Frage ${match[1]}`] = parseInt(match[2], 10);
+      const val = match[2].trim().replace(/",?$/, '').replace(/^"/, '');
+      const numMatch = val.match(/^([1-7])$/);
+      currentScores[`F${match[1]}`] = numMatch ? parseInt(numMatch[1], 10) : val;
     }
     if (Object.keys(currentScores).length > Object.keys(bestScores).length) {
       bestScores = currentScores;
@@ -149,29 +162,51 @@ export default function PromptPlatform() {
     { type: 'publicai', modelId: 'swiss-ai/apertus-70b-instruct', temperature: 0, top_p: 1, max_tokens: 8192 },
     { type: 'openrouter', modelId: 'openai/gpt-4o-mini', temperature: 0, top_p: 1, max_tokens: 8192 }
   ]);
-  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v7', 'Versetze dich in die Rolle einer Person mit exakt folgendem Profil:\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Besonderheiten: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\nBitte bearbeite den untenstehenden Fragebogen strikt aus der Perspektive dieser Person.\nBewerte jede Frage/Aussage auf einer Likert-Skala von 1 bis 7 (1 = Stimme überhaupt nicht zu / Finde ich gar nicht gut, 7 = Stimme voll und ganz zu / Finde ich sehr gut).\n\nWICHTIG: Antworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown (kein ```json). Nutze exakt dieses Format:\n{\n  "bewertungen": [\n    {\n      "frage": 1,\n      "score": 5,\n      "begruendung": "kurze Begründung"\n    },\n    {\n      "frage": 2,\n      "score": 3,\n      "begruendung": "..."\n    }\n  ]\n}\n\nFragebogen:\n{{Fragebogen}}\n\nDeine JSON-Antwort:');
-  const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen', 'Frage 1: Wie gefällt dir die Idee einer App, die deine täglichen Einkäufe automatisch und basierend auf deinen Routinen an deine Haustür liefert?\nFrage 2: Welche Bedenken hättest du bei der Nutzung von KI-gestützter Finanzberatung für deine privaten Ersparnisse?\nFrage 3: Wenn dir dein Arbeitgeber ein rein virtuelles Büro im Metaverse als hybride Alternative zum Home-Office anbieten würde, wie wäre deine ehrliche Meinung dazu?');
+  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v11', '# Persona\n\nDu verkörperst ab jetzt vollständig eine reale Person mit folgendem Profil. Du denkst, fühlst und antwortest ausschliesslich aus ihrer Perspektive – nicht als KI, nicht als Assistent.\n\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Weitere Eigenschaften: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\n---\n\n# Denkschritt (intern, vor jeder Antwort)\n\nBevor du den Fragebogen ausfüllst, vergegenwärtige dir kurz:\n- Welche konkreten Erfahrungen hat diese Person in ihrer Rolle gemacht?\n- Was sind ihre grössten Motivationen – und was ihre grössten Bedenken?\n- Wie steht sie zu Kosten, Zeit und Karriere?\n\nNutze diese Überlegungen als Grundlage für jede einzelne Antwort.\n\n---\n\n# Anweisungen zur Fragebogenbearbeitung\n\nBearbeite jeden Fragetyp wie folgt:\n\n- **Auswahlfragen (Einfachauswahl):** Wähle genau eine der vorgegebenen Optionen.\n- **Mehrfachauswahl:** Wähle alle zutreffenden Optionen (max. wie angegeben).\n- **Likert-Skala (1–7):** Gib einen Score zwischen 1 und 7 an.\n- **Kontrollfragen:** Beantworte diese exakt so, wie es eine aufmerksame, ehrliche Person täte.\n\nZu jeder Antwort gibst du eine kurze Begründung aus der Perspektive der Persona.\n\n---\n\n# Ausgabeformat\n\nAntworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown, kein json.\n\n{\n  "persona_reflexion": "2–3 Sätze: Wie denkt diese Person über das Thema? Was treibt sie an, was bremst sie?",\n  "bewertungen": [\n    {\n      "frage": 1,\n      "antwort": "Gewählte Option oder Score",\n      "begruendung": "Kurze Begründung aus Persona-Perspektive"\n    }\n  ]\n}\n\n---\n\n# Fragebogen\n\n{{Fragebogen}}\n\n---\n\nDeine JSON-Antwort:');
+  const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen_v5', `SEKTION B - Weiterbildungsmotivation
+F4. Was ist Ihr primäres Motiv für eine CAS-Weiterbildung im Bereich Marketing, Digital & Communication? Karriereaufstieg / Wissen vertiefen / Quereinstieg / Formalen Abschluss erlangen / Netzwerk aufbauen / Praxisprobleme lösen
+F5. KONTROLLFRAGE (Aufmerksamkeitscheck) Um sicherzustellen, dass Sie die Fragen sorgfältig lesen – wählen Sie bitte ausschliesslich die Option «Netzwerk / Community». Karriereperspektiven / Inhalte / Netzwerk / Community / Kosten / Marke der Institution
+F6. «Ich würde eine Weiterbildung auch dann absolvieren, wenn mein Arbeitgeber die Kosten nicht übernimmt.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F7. Welche Themen sind für Sie am relevantesten? (bis zu 3 auswählen) KI & Automatisierung / Data Analytics / Content Strategy / Social Media / SEO/SEA / Brand Management / Customer Experience / Integrierte Kommunikation
+
+SEKTION C - Format-Präferenzen
+F8. Welches Lernformat bevorzugen Sie für eine berufsbegleitende Weiterbildung? Vollständig online asynchron / Online synchron / Hybrid / Vollständig Präsenz
+F9. An welchen Tagen wären Präsenzmodule für Sie günstig? (Mehrfachauswahl) Mo / Di / Mi / Do / Fr / Sa / Kein Präsenztag möglich
+F10. Wie viel Zeit können Sie realistisch pro Woche investieren? Bis 3 Std. / 4-6 Std. / 7-10 Std. / Mehr als 10 Std.
+
+SEKTION D - Relevanz CAS-Inhalte
+F11. Wie relevant ist für Sie: «Strategische Markenführung und Positionierung»? (1: Gar nicht relevant - 7: Äusserst relevant)
+F12. Wie relevant ist für Sie: «Einsatz von KI-Tools im Marketing-Alltag»? (1: Gar nicht relevant - 7: Äusserst relevant)
+F13. KONTROLLFRAGE (Konsistenzcheck zu F6) Angenommen, Sie müssen eine Weiterbildung vollständig selbst finanzieren – wie beeinflusst das Ihre Entscheidung? Definitiv verzichten / Eher verzichten / Unentschlossen / Wahrscheinlich trotzdem / Definitiv trotzdem
+F14. Wie relevant ist für Sie: «Datenanalyse und Marketing-Reporting»? (1: Gar nicht relevant - 7: Äusserst relevant)
+
+SEKTION E - Entscheidungsfaktoren
+F15. Was ist der wichtigste Faktor bei der Wahl eines CAS-Programms? Reputation der Institution / Curriculum-Qualität / Praxisrelevanz / Formatflexibilität / Kosten / Netzwerkpotenzial
+F16. Welchen maximalen Gesamtbetrag empfinden Sie für einen CAS als gerechtfertigt? Bis CHF 3'000 / 3'001-6'000 / 6'001-9'000 / 9'001-12'000 / Mehr als 12'000
+F17. «Ein direkter Praxistransfer in meinen Arbeitsalltag ist für mich ein entscheidendes Kriterium bei der Programmwahl.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F18. Haben Sie in den letzten 3 Jahren aktiv nach CAS-Weiterbildungen im Bereich Marketing/Digital/Kommunikation gesucht? Ja, konkret evaluiert / Ja, grob recherchiert / Nein, aber geplant / Nein, kein Bedarf
+F20. KONTROLLFRAGE (Selbstauskunft / Straight-liner-Check) Wie haben Sie diesen Fragebogen ausgefüllt? Jede Frage sorgfältig gelesen und ehrlich beantwortet / Die meisten gelesen, einige überflogen / Viele Fragen nur oberflächlich beantwortet / Den Fragebogen hauptsächlich schnell durchgeklickt`);
 
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
     acc[role] = {
       Geschlecht: 'Männlich, Weiblich',
-      Alter: '',
+      Alter: '30',
       Nationalitaet: 'Schweiz',
       Haushalt: 'Zwei Erwachsene mit Kindern, Single',
       Ausbildung: 'Master, Bachelor',
       Berufserfahrung: '3 Jahre',
       Wohnsitzland: 'Schweiz',
-      Postleitzahl: '8704, 8000',
+      Postleitzahl: '8000',
       Avatar_Eigenschaften_und_Praeferenzen: ''
     };
     return acc;
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v6', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v10', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
-  const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string }[]>([]);
+  const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
   const [historicRuns, setHistoricRuns] = useState<any[]>([]);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
 
@@ -191,6 +226,7 @@ export default function PromptPlatform() {
 
   const [offlineBatches, setOfflineBatches] = useLocalStorage<OfflineBatch[]>('pp_offline_batches_v1', []);
   const [selectedRunsForSync, setSelectedRunsForSync] = useState<Record<string, string>>({});
+  const [includeOfflineData, setIncludeOfflineData] = useLocalStorage('pp_include_offline_data', true);
 
   const handleAddBatch = () => {
     setOfflineBatches(prev => [...prev, { id: Date.now().toString(), modelName: 'Demoscope', targetRunIds: [], items: [] }]);
@@ -345,9 +381,11 @@ export default function PromptPlatform() {
 
       const combo: Record<string, string> = {
         Rolle: extractedData.profil?.Rolle || 'Unbekannt',
+        ...extractedData.profil
       };
+      // fallback in case variables state had some other names missing
       variables.forEach(v => {
-        if (v !== 'Rolle') combo[v] = extractedData.profil?.[v] || '';
+        if (v !== 'Rolle' && !combo[v]) combo[v] = extractedData.profil?.[v] || '';
       });
 
       let mockResponse = JSON.stringify(extractedData);
@@ -378,22 +416,35 @@ export default function PromptPlatform() {
 
     batch.items.filter(i => i.status === 'success' && i.result).forEach(item => {
       try {
-        const scores = parseLikertScores(item.result!);
-        let comboInfo = "Unbekannt";
         let match = item.result!.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
         let jsonStr = match ? match[1] : item.result!;
         const parsed = JSON.parse(jsonStr);
+        let comboInfo = "Unbekannt";
+        
         if (parsed.profil) {
-          comboInfo = parsed.profil.Rolle || Object.values(parsed.profil).join(', ');
+          comboInfo = parsed.profil.Rolle || Object.values(parsed.profil).filter(Boolean).join(', ');
         }
 
+        const ans = parsed.antworten || parseAnswers(item.result!);
+
         const rowData: any = { Rolle: comboInfo };
-        Object.entries(scores).forEach(([frage, score]) => {
+        Object.entries(ans).forEach(([frage, score]) => {
           allFragen.add(frage);
           rowData[frage] = score;
         });
         rows.push(rowData);
-      } catch (e) { }
+      } catch (e) {
+        // Fallback robust parsing if JSON is broken completely
+        try {
+          const scores = parseAnswers(item.result!);
+          const rowData: any = { Rolle: "Unbekannt" };
+          Object.entries(scores).forEach(([frage, score]) => {
+            allFragen.add(frage);
+            rowData[frage] = score;
+          });
+          rows.push(rowData);
+        } catch(e2) {}
+      }
     });
 
     const columns = Array.from(allFragen).sort((a, b) => parseInt(a.replace(/\D/g, '') || '0') - parseInt(b.replace(/\D/g, '') || '0'));
@@ -567,39 +618,43 @@ export default function PromptPlatform() {
 
     setResults(newResults);
 
-    // Process each one
-    for (let i = 0; i < newResults.length; i++) {
-      const current = newResults[i];
-      setResults(prev => prev.map(r => r.id === current.id ? { ...r, status: 'loading' } : r));
+    // Process in batches of 5 to avoid aggressive rate-limiting but prevent sequential blocking
+    const batchSize = 5;
+    for (let i = 0; i < newResults.length; i += batchSize) {
+      const batch = newResults.slice(i, i + batchSize);
+      
+      setResults(prev => prev.map(r => batch.find(b => b.id === r.id) ? { ...r, status: 'loading' } : r));
 
-      try {
-        const res = await processPrompt(current.promptSent, current.modelConfig, apiKey); // Assuming current.promptConfig is correct
-        setResults(prev => prev.map(r => r.id === current.id ? { ...r, status: 'success', response: res } : r));
+      await Promise.all(batch.map(async (current) => {
+        try {
+          const res = await processPrompt(current.promptSent, current.modelConfig, apiKey);
+          setResults(prev => prev.map(r => r.id === current.id ? { ...r, status: 'success', response: res } : r));
 
-        if (dbRunId) {
-          supabase.from('prompt_run_results').insert({
-            run_id: dbRunId,
-            model_id: current.modelId,
-            combo: current.combo,
-            prompt_sent: current.promptSent,
-            response: res,
-            status: 'success'
-          }).then(({ error }) => { if (error) console.error("Error saving result", error); });
+          if (dbRunId) {
+            supabase.from('prompt_run_results').insert({
+              run_id: dbRunId,
+              model_id: current.modelId,
+              combo: current.combo,
+              prompt_sent: current.promptSent,
+              response: res,
+              status: 'success'
+            }).then(({ error }) => { if (error) console.error("Error saving result", error); });
+          }
+        } catch (err: any) {
+          setResults(prev => prev.map(r => r.id === current.id ? { ...r, status: 'error', response: err.message || 'Error executing API' } : r));
+
+          if (dbRunId) {
+            supabase.from('prompt_run_results').insert({
+              run_id: dbRunId,
+              model_id: current.modelId,
+              combo: current.combo,
+              prompt_sent: current.promptSent,
+              response: err.message || 'Error executing API',
+              status: 'error'
+            }).then(({ error }) => { if (error) console.error("Error saving result", error); });
+          }
         }
-      } catch (err: any) {
-        setResults(prev => prev.map(r => r.id === current.id ? { ...r, status: 'error', response: err.message || 'Error executing API' } : r));
-
-        if (dbRunId) {
-          supabase.from('prompt_run_results').insert({
-            run_id: dbRunId,
-            model_id: current.modelId,
-            combo: current.combo,
-            prompt_sent: current.promptSent,
-            response: err.message || 'Error executing API',
-            status: 'error'
-          }).then(({ error }) => { if (error) console.error("Error saving result", error); });
-        }
-      }
+      }));
     }
     setIsGenerating(false);
     fetchHistory();
@@ -657,7 +712,33 @@ export default function PromptPlatform() {
   const currentModelsCount = getModelsToRun().length;
   const comboCount = generateCombinations().length;
 
-  const filteredResultsAll = results.filter(r => {
+  const offlineResults: any[] = offlineBatches.flatMap(batch => 
+    (batch.items || []).filter(i => i.status === 'success' && i.result).map(item => {
+      let combo: Record<string, string> = { Rolle: 'Unbekannt' };
+      try {
+        let match = item.result!.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        let jsonStr = match ? match[1] : item.result!;
+        const parsed = JSON.parse(jsonStr);
+        if (parsed.profil) {
+          combo = { ...parsed.profil, Rolle: parsed.profil.Rolle || 'Unbekannt' };
+        }
+      } catch (e) {}
+      
+      return {
+        id: `offline-${batch.id}-${item.id}`,
+        promptSent: 'Offline Upload: ' + (batch.modelName || 'Datensatz'),
+        response: item.result,
+        status: 'success' as const,
+        combo: combo,
+        modelId: batch.modelName || 'Manuelles Modell',
+        modelConfig: { type: 'openrouter', modelId: 'offline' }
+      };
+    })
+  );
+
+  const combinedResults = includeOfflineData ? [...results, ...offlineResults] : [...results];
+
+  const filteredResultsAll = combinedResults.filter(r => {
     let roleName = r.combo['Rolle'] || 'Keine Rolle';
     if (roleName.includes('(')) roleName = roleName.split('(')[0].trim();
     if (dashboardRoleFilter !== 'Alle' && roleName !== dashboardRoleFilter) return false;
@@ -675,7 +756,7 @@ export default function PromptPlatform() {
       // Find all unique questions across all responses to ensure consistent column ordering
       const allFragen = new Set<string>();
       filteredResultsAll.forEach(r => {
-        const scores = parseLikertScores(r.response);
+        const scores = parseAnswers(r.response);
         Object.keys(scores).forEach(f => allFragen.add(f));
       });
       const sortQuestions = (a: string, b: string) => {
@@ -697,7 +778,7 @@ export default function PromptPlatform() {
         });
 
         // Parse scores and map them to their specific columns
-        const scores = parseLikertScores(r.response);
+        const scores = parseAnswers(r.response);
         sortedFragen.forEach(f => {
           rowItem[f] = scores[f] !== undefined ? scores[f] : '';
         });
@@ -773,16 +854,19 @@ export default function PromptPlatform() {
     const allFragen = new Set<string>();
 
     filteredResultsValid.forEach(r => {
-      const scores = parseLikertScores(r.response);
+      const scores = parseAnswers(r.response);
 
       // We always group by model inside the chart, so we can compare the models exactly!
       const groupKey = r.modelId;
 
       if (!groupStats[groupKey]) groupStats[groupKey] = {};
       Object.entries(scores).forEach(([frage, score]) => {
+        const numScore = Number(score);
+        if (isNaN(numScore)) return; // Skip non-numeric values for the bar chart calculation
+
         allFragen.add(frage);
         if (!groupStats[groupKey][frage]) groupStats[groupKey][frage] = { sum: 0, count: 0 };
-        groupStats[groupKey][frage].sum += score;
+        groupStats[groupKey][frage].sum += numScore;
         groupStats[groupKey][frage].count += 1;
       });
     });
@@ -805,7 +889,7 @@ export default function PromptPlatform() {
     const grouped: any = {};
 
     filteredResultsValid.forEach(r => {
-      const scores = parseLikertScores(r.response);
+      const scores = parseAnswers(r.response);
       const roleName = r.combo['Rolle'] || 'Keine Rolle';
       const simplifyRole = roleName.includes('(') ? roleName.split('(')[0].trim() : roleName;
       const modelId = r.modelId;
@@ -823,12 +907,15 @@ export default function PromptPlatform() {
       }
 
       Object.entries(scores).forEach(([frage, score]) => {
+        const numScore = Number(score);
+        if (isNaN(numScore)) return; // Skip text answers for averages
+
         allFragenForTable.add(frage);
         if (!grouped[key].scores[frage]) {
           grouped[key].scores[frage] = 0;
           grouped[key].counts[frage] = 0;
         }
-        grouped[key].scores[frage] += score;
+        grouped[key].scores[frage] += numScore;
         grouped[key].counts[frage] += 1;
       });
     });
@@ -856,7 +943,7 @@ export default function PromptPlatform() {
     const grouped: any = {};
 
     filteredResultsValid.forEach(r => {
-      const scores = parseLikertScores(r.response);
+      const scores = parseAnswers(r.response);
       const roleName = r.combo['Rolle'] || 'Keine Rolle';
       const simplifyRole = roleName.includes('(') ? roleName.split('(')[0].trim() : roleName;
       const modelId = r.modelId;
@@ -867,13 +954,16 @@ export default function PromptPlatform() {
         grouped[key] = { role: simplifyRole, modelId: modelId, scores: {}, counts: {} };
       }
 
-      Object.entries(scores).forEach(([frage, score]) => {
+    Object.entries(scores).forEach(([frage, score]) => {
+        const numScore = Number(score);
+        if (isNaN(numScore)) return; // Skip text answers for averages
+
         allFragenForTable.add(frage);
         if (!grouped[key].scores[frage]) {
           grouped[key].scores[frage] = 0;
           grouped[key].counts[frage] = 0;
         }
-        grouped[key].scores[frage] += score;
+        grouped[key].scores[frage] += numScore;
         grouped[key].counts[frage] += 1;
       });
     });
@@ -922,7 +1012,7 @@ export default function PromptPlatform() {
       <aside className="w-64 border-r bg-muted/40 p-4 shrink-0 flex flex-col gap-2">
         <div className="mb-6 mt-4 px-4 flex flex-col gap-4">
           <img src="/hsg-logo.png" alt="HSG Logo" className="w-32 h-auto" />
-          <h1 className="text-xl font-serif font-bold tracking-tight text-primary">Prompt Platform</h1>
+          <h1 className="text-xl font-serif font-bold tracking-tight text-primary">Synthetic Persona Data Plattform</h1>
         </div>
 
         <div className="flex-1 space-y-2">
@@ -1498,7 +1588,7 @@ export default function PromptPlatform() {
                                   </Button>
 
                                   {item.status === 'success' && <Badge className="absolute bottom-2 right-2 bg-green-500 hover:bg-green-600">Erledigt</Badge>}
-                                  {item.status === 'error' && <Badge variant="destructive" className="absolute bottom-2 right-2">Fehler</Badge>}
+                                  {item.status === 'error' && <Badge variant="destructive" className="absolute bottom-2 right-2 max-w-[200px] truncate" title={item.result}>Fehler: {item.result}</Badge>}
                                 </div>
                               ))}
                             </div>
@@ -1607,23 +1697,65 @@ export default function PromptPlatform() {
           {activeTab === 'dashboard' && (
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-16">
 
-              <div className="flex items-center justify-between pb-4">
-                <div>
-                  <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-                  <p className="text-muted-foreground">Analytics und Ergebnisse deines Fragebogens (Live-Export jederzeit möglich)</p>
+              <div className="flex items-start justify-between pb-4">
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
+                    <p className="text-muted-foreground">Analytics und Ergebnisse deines Fragebogens (Live-Export jederzeit möglich)</p>
+                  </div>
+                  
+                  {/* Historic run selector and Offline toggle */}
+                  <div className="flex flex-wrap items-center gap-6 mt-1 p-2 bg-secondary/30 rounded-lg border border-border/50">
+                    <div className="flex items-center gap-2">
+                      <History className="w-4 h-4 text-muted-foreground" />
+                      <Label htmlFor="run-selector" className="font-semibold text-sm">Lauf wählen:</Label>
+                      <Select value={activeRunId ? activeRunId.toString() : 'current'} onValueChange={(v) => {
+                        if (v === 'current') {
+                          setActiveRunId(null);
+                          setResults([]);
+                        } else {
+                          loadHistoricRun(parseInt(v));
+                        }
+                      }}>
+                        <SelectTrigger id="run-selector" className="w-[280px] h-8 bg-background">
+                          <SelectValue placeholder="Aktueller Lauf" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="current" className="font-semibold">Aktueller Lauf (ungespeichert)</SelectItem>
+                          {historicRuns.length > 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground font-medium">Gespeicherte Läufe</div>}
+                          {historicRuns.map(run => (
+                            <SelectItem key={run.id} value={run.id.toString()}>
+                              {run.name} <span className="text-muted-foreground text-xs ml-2">({new Date(run.created_at).toLocaleDateString()})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {activeRunId && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setActiveRunId(null)} title="Zum aktuellen Lauf zurückkehren">
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="h-4 w-px bg-border hidden sm:block"></div>
+
+                    <div className="flex items-center space-x-2 bg-background px-3 py-1 rounded-md border shadow-sm">
+                      <Checkbox 
+                        id="offline-toggle" 
+                        checked={includeOfflineData}
+                        onCheckedChange={(c) => setIncludeOfflineData(!!c)} 
+                      />
+                      <Label 
+                        htmlFor="offline-toggle" 
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                      >
+                        Offline-Datensatz {includeOfflineData ? 'einbeziehen' : 'ausschließen'}
+                      </Label>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" className="gap-2 border-primary/20 hover:bg-primary/5" onClick={() => {
-                    setActiveTab('manual');
-                    const newId = Date.now().toString();
-                    setOfflineBatches(prev => [...prev, { id: newId, modelName: 'Demoscope', targetRunIds: [], items: [] }]);
-                    if (activeRunId) {
-                      setSelectedRunsForSync(prev => ({ ...prev, [newId]: activeRunId.toString() }));
-                    }
-                  }}>
-                    <Database className="w-4 h-4 text-primary" />
-                    + Offline-Datensatz
-                  </Button>
+
                   <Button variant="default" className="gap-2" onClick={downloadExcel} disabled={filteredResultsAll.length === 0 || isGenerating}>
                     <Download className="w-4 h-4" />
                     Export
@@ -1729,13 +1861,21 @@ export default function PromptPlatform() {
                               <TableCell className="align-middle">
                                 <Badge variant="outline" className="font-medium text-[10px] border-primary/20 text-primary bg-primary/5">{row.modelId}</Badge>
                               </TableCell>
-                              {tableData.columns.map(col => (
-                                <TableCell key={col} className="text-center tabular-nums align-middle px-4">
-                                  {row[col] ? (
-                                    <span className={Number(row[col]) >= 4 ? 'text-green-600 font-medium' : 'text-orange-600 font-medium'}>{row[col]}</span>
-                                  ) : '-'}
-                                </TableCell>
-                              ))}
+                              {tableData.columns.map(col => {
+                                const val = row[col];
+                                const numVal = Number(val);
+                                const isNum = val && !isNaN(numVal) && String(val).trim() !== '';
+                                return (
+                                  <TableCell key={col} className="text-center align-middle px-4 max-w-[200px] truncate" title={String(val)}>
+                                    {val ? (
+                                      isNum ? 
+                                        <span className={numVal >= 4 ? 'text-green-600 font-medium tabular-nums' : 'text-orange-600 font-medium tabular-nums'}>{val}</span>
+                                        : 
+                                        <span className="text-sm">{val}</span>
+                                    ) : '-'}
+                                  </TableCell>
+                                );
+                              })}
                             </TableRow>
                           ))}
                         </TableBody>
@@ -1782,7 +1922,11 @@ export default function PromptPlatform() {
                                   {r.status === 'loading' ? (
                                     <div className="flex items-center space-x-2 text-muted-foreground animate-pulse mt-1">
                                       <div className="h-4 w-4 rounded-full bg-current"></div>
-                                      <span className="text-sm">Lädt/Generiert (Erst-Download d. Modells kann dauern)...</span>
+                                      <span className="text-sm">
+                                        {r.modelConfig?.type === 'local' 
+                                          ? 'Lädt/Generiert (Erst-Download d. Modells kann dauern)...' 
+                                          : 'Lädt/Generiert Antwort (API request)...'}
+                                      </span>
                                     </div>
                                   ) : (
                                     <div className="flex flex-col gap-3 py-1">
@@ -1790,7 +1934,7 @@ export default function PromptPlatform() {
                                       <div className="flex gap-1.5 flex-wrap">
                                         {Object.entries(r.combo).filter(([k]) => k !== 'Rolle').map(([k, v]) => (
                                           <span key={k} className="bg-zinc-100 dark:bg-zinc-900 border px-1.5 py-0.5 rounded shadow-sm text-zinc-600 dark:text-zinc-400 font-mono text-[10px]">
-                                            {v}
+                                            {String(v)}
                                           </span>
                                         ))}
                                       </div>
@@ -1798,11 +1942,15 @@ export default function PromptPlatform() {
                                       {/* Extracted Likert Scores */}
                                       {r.status === 'success' && (
                                         <div className="flex gap-2 flex-wrap">
-                                          {Object.entries(parseLikertScores(r.response)).map(([f, s]) => (
-                                            <span key={f} className="text-xs bg-secondary text-secondary-foreground font-semibold px-2 py-0.5 rounded shadow-sm border">
-                                              {f}: <span className={s >= 4 ? 'text-green-600' : 'text-orange-600'}>{s}</span>/7
-                                            </span>
-                                          ))}
+                                          {Object.entries(parseAnswers(r.response)).map(([f, s]) => {
+                                            const numS = Number(s);
+                                            const isNum = !isNaN(numS) && String(s).trim() !== '';
+                                            return (
+                                              <span key={f} className="text-xs bg-secondary text-secondary-foreground font-semibold px-2 py-0.5 rounded shadow-sm border max-w-xs truncate" title={String(s)}>
+                                                {f}: <span className={isNum ? (numS >= 4 ? 'text-green-600' : 'text-orange-600') : 'text-primary'}>{s}</span>{isNum ? '/7' : ''}
+                                              </span>
+                                            );
+                                          })}
                                         </div>
                                       )}
 
