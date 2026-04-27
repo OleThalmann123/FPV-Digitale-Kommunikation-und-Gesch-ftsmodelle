@@ -260,12 +260,14 @@ Soziale Kompetenz: Leadership / Data-driven mindset, Teamwork / Strategic thinki
 Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Marketing Strategy / Campaign Management, Campaign Management / Performance Marketing`
   };
 
-  // Persona-Splitter so eingestellt, dass die LLMs ebenfalls genau 24 Personas produzieren -- gleich
-  // viele wie der Demoscope-Datensatz. Aufteilung: 6 Rollen x 2 Geschlechter x 1 Alter-Range
-  // x 1 Erfahrungs-Range x 1 Ausbildung x 2 Haushalt = 24.
+  // Persona-Splitter so eingestellt, dass die LLMs Familien-Bias auf H5 (Saturday/Zeit) gut auflösen
+  // können. Aufteilung: 6 Rollen x 2 Geschlechter x 1 Alter-Range x 1 Erfahrungs-Range
+  // x 1 Ausbildung x 3 Haushalt = 36 Personas pro Modell.
   // Alter & Erfahrung als zusammenhängende Range-Strings -> bei T=0.7 wählt das Modell intern
   // pro Run einen plausiblen Wert, das gibt zusätzliche Varianz ohne Combos zu erhöhen.
-  // Haushalt ist die zweite Splitter-Dimension, um den Familien-Bias bei H5 (Saturday/Zeit) sichtbar zu machen.
+  // Haushalt mit drei Stufen (Single / Paar / Familie) macht den von Roman markierten Familien-Bias
+  // explizit messbar; der Demoscope-Datensatz (n=24) wird trotzdem 1:1 dagegen aggregiert,
+  // die LLM-Seite hat einfach n=36 als grössere Stichprobe.
   // Werte aus manueller Recherche (Ole, Screenshot 27.04.2026).
   const roleAgeRanges: Record<string, string> = {
     'CEM (Customer Experience Manager)': '23-26 Jahre',
@@ -290,7 +292,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       Geschlecht: 'Männlich, Weiblich',
       Alter: roleAgeRanges[role] || '25-30 Jahre',
       Nationalitaet: 'Schweiz',
-      Haushalt: '1 Person kein Kind, 2 Personen 1 Kind',
+      Haushalt: '1 Person kein Kind, 2 Personen ohne Kind, 2 Personen 1 Kind',
       Ausbildung: 'Bachelor / Master',
       Berufserfahrung: roleWorkExperience[role] || '3-5 Jahre',
       Wohnsitzland: 'Schweiz',
@@ -301,7 +303,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v22', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v23', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
