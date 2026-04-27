@@ -46,6 +46,45 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import * as XLSX from 'xlsx';
 import { supabase } from '@/lib/supabase';
 
+// Bringt eine LLM-Antwort in ein analyseförmiges Skalar:
+// - Likert (Zahl 1-7)  -> number
+// - Single-Choice      -> string
+// - Mehrfachauswahl    -> "A | B | C"
+// - Ranking            -> "1. AI-Tools | 2. Analytics | ..."
+// - Freitext (Q1-Q3)   -> string
+function normalizeAnswerValue(raw: any): string | number {
+  if (raw === null || raw === undefined) return '';
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return '';
+    if (typeof raw[0] === 'object' && raw[0] !== null && ('rang' in raw[0] || 'rank' in raw[0] || 'kategorie' in raw[0] || 'category' in raw[0])) {
+      const sorted = [...raw].sort((a, b) => Number(a.rang ?? a.rank ?? 99) - Number(b.rang ?? b.rank ?? 99));
+      return sorted
+        .map(item => `${item.rang ?? item.rank ?? '?'}. ${item.kategorie ?? item.category ?? item.label ?? ''}`.trim())
+        .join(' | ');
+    }
+    return raw.map(v => (typeof v === 'object' ? JSON.stringify(v) : String(v))).join(' | ');
+  }
+  if (typeof raw === 'object') {
+    return JSON.stringify(raw);
+  }
+  const scStr = String(raw).trim();
+  const scMatch = scStr.match(/^([1-7])$/);
+  if (scMatch) return Number(scMatch[1]);
+  return scStr;
+}
+
+// Mappt Frage-Identifier auf einheitlichen Schlüssel: numerische Fragen -> "F<n>", Q1-Q3 -> "Q<n>".
+function canonicalQuestionKey(fn: any): string | null {
+  if (fn === null || fn === undefined) return null;
+  const raw = String(fn).trim();
+  if (!raw) return null;
+  const qMatch = raw.match(/^q[_\s]*?(\d+)$/i) || raw.match(/^qual[_\s]*?(\d+)$/i);
+  if (qMatch) return `Q${qMatch[1]}`;
+  const fNum = raw.replace(/[^\d]/g, '');
+  if (!fNum) return null;
+  return `F${fNum}`;
+}
+
 function parseAnswers(responseText: string): Record<string, string | number> {
   let bestScores: Record<string, string | number> = {};
   if (!responseText) return bestScores;
@@ -69,36 +108,20 @@ function parseAnswers(responseText: string): Record<string, string | number> {
     if (Array.isArray(bewertungen) && bewertungen.length > 0) {
       for (const b of bewertungen) {
         const fn = b.frage ?? b.Frage ?? b.id ?? b.question;
-        let sc = b.score ?? b.Score ?? b.bewertung ?? b.Bewertung ?? b.wert ?? b.antwort ?? b.Antwort;
-        if (fn !== undefined && sc !== undefined) {
-          const frageNum = String(fn).replace(/[^\d]/g, '');
-          if (frageNum) {
-            const scStr = String(sc).trim();
-            const scMatch = scStr.match(/^([1-7])$/);
-            if (scMatch) {
-              bestScores[`F${frageNum}`] = Number(scMatch[1]);
-            } else {
-              bestScores[`F${frageNum}`] = scStr;
-            }
-            jsonSuccess = true;
-          }
+        let sc = b.score ?? b.Score ?? b.bewertung ?? b.Bewertung ?? b.wert ?? b.antwort ?? b.Antwort ?? b.ranking ?? b.Ranking ?? b.text;
+        const key = canonicalQuestionKey(fn);
+        if (key && sc !== undefined) {
+          bestScores[key] = normalizeAnswerValue(sc);
+          jsonSuccess = true;
         }
       }
     } else if (typeof parsed === 'object' && parsed !== null) {
       const targetObj = parsed.antworten || parsed;
       for (const [k, v] of Object.entries(targetObj)) {
-        if (/f(?:rage)?_?\s*\d+/i.test(k) || !isNaN(Number(k.replace(/[^\d]/g, '')))) {
-          const frageNum = k.replace(/[^\d]/g, '');
-          if (frageNum) {
-            const scStr = String(v).trim();
-            const scMatch = scStr.match(/^([1-7])$/);
-            if (scMatch) {
-              bestScores[`F${frageNum}`] = Number(scMatch[1]);
-            } else {
-              bestScores[`F${frageNum}`] = scStr;
-            }
-            jsonSuccess = true;
-          }
+        const key = canonicalQuestionKey(k);
+        if (key) {
+          bestScores[key] = normalizeAnswerValue(v);
+          jsonSuccess = true;
         }
       }
     }
@@ -158,34 +181,52 @@ export default function PromptPlatform() {
   const [dashboardRoleFilter, setDashboardRoleFilter] = useState<string>('Alle');
   const [apiKey, setApiKey] = useLocalStorage('pp_apiKey', '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');
   const [modelList, setModelList] = useLocalStorage('pp_modelList', 'publicai:swiss-ai/apertus-70b-instruct\nopenai/gpt-4o-mini');
-  const [configuredModels, setConfiguredModels] = useLocalStorage<ModelConfig[]>('pp_configured_models_v3', [
-    { type: 'publicai', modelId: 'swiss-ai/apertus-70b-instruct', temperature: 0, top_p: 1, max_tokens: 8192 },
-    { type: 'openrouter', modelId: 'openai/gpt-4o-mini', temperature: 0, top_p: 1, max_tokens: 8192 }
+  // Default-Temperatur 0.7 statt 0: bei T=0 picken die Modelle deterministisch das wahrscheinlichste
+  // Token, wodurch synthetische Personas kaum Varianz zeigen. ~0.7 ist in der Literatur zur
+  // synthetischen Persona-/Survey-Simulation der gängige Startwert (Begründung & Zitate -> Submission-Doku).
+  const [configuredModels, setConfiguredModels] = useLocalStorage<ModelConfig[]>('pp_configured_models_v4', [
+    { type: 'publicai', modelId: 'swiss-ai/apertus-70b-instruct', temperature: 0.7, top_p: 1, max_tokens: 8192 },
+    { type: 'openrouter', modelId: 'openai/gpt-4o-mini', temperature: 0.7, top_p: 1, max_tokens: 8192 }
   ]);
-  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v11', '# Persona\n\nDu verkörperst ab jetzt vollständig eine reale Person mit folgendem Profil. Du denkst, fühlst und antwortest ausschliesslich aus ihrer Perspektive – nicht als KI, nicht als Assistent.\n\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Weitere Eigenschaften: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\n---\n\n# Denkschritt (intern, vor jeder Antwort)\n\nBevor du den Fragebogen ausfüllst, vergegenwärtige dir kurz:\n- Welche konkreten Erfahrungen hat diese Person in ihrer Rolle gemacht?\n- Was sind ihre grössten Motivationen – und was ihre grössten Bedenken?\n- Wie steht sie zu Kosten, Zeit und Karriere?\n\nNutze diese Überlegungen als Grundlage für jede einzelne Antwort.\n\n---\n\n# Anweisungen zur Fragebogenbearbeitung\n\nBearbeite jeden Fragetyp wie folgt:\n\n- **Auswahlfragen (Einfachauswahl):** Wähle genau eine der vorgegebenen Optionen.\n- **Mehrfachauswahl:** Wähle alle zutreffenden Optionen (max. wie angegeben).\n- **Likert-Skala (1–7):** Gib einen Score zwischen 1 und 7 an.\n- **Kontrollfragen:** Beantworte diese exakt so, wie es eine aufmerksame, ehrliche Person täte.\n\nZu jeder Antwort gibst du eine kurze Begründung aus der Perspektive der Persona.\n\n---\n\n# Ausgabeformat\n\nAntworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown, kein json.\n\n{\n  "persona_reflexion": "2–3 Sätze: Wie denkt diese Person über das Thema? Was treibt sie an, was bremst sie?",\n  "bewertungen": [\n    {\n      "frage": 1,\n      "antwort": "Gewählte Option oder Score",\n      "begruendung": "Kurze Begründung aus Persona-Perspektive"\n    }\n  ]\n}\n\n---\n\n# Fragebogen\n\n{{Fragebogen}}\n\n---\n\nDeine JSON-Antwort:');
-  const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen_v5', `SEKTION B - Weiterbildungsmotivation
-F4. Was ist Ihr primäres Motiv für eine CAS-Weiterbildung im Bereich Marketing, Digital & Communication? Karriereaufstieg / Wissen vertiefen / Quereinstieg / Formalen Abschluss erlangen / Netzwerk aufbauen / Praxisprobleme lösen
-F5. KONTROLLFRAGE (Aufmerksamkeitscheck) Um sicherzustellen, dass Sie die Fragen sorgfältig lesen – wählen Sie bitte ausschliesslich die Option «Netzwerk / Community». Karriereperspektiven / Inhalte / Netzwerk / Community / Kosten / Marke der Institution
-F6. «Ich würde eine Weiterbildung auch dann absolvieren, wenn mein Arbeitgeber die Kosten nicht übernimmt.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
-F7. Welche Themen sind für Sie am relevantesten? (bis zu 3 auswählen) KI & Automatisierung / Data Analytics / Content Strategy / Social Media / SEO/SEA / Brand Management / Customer Experience / Integrierte Kommunikation
+  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v12', '# Persona\n\nDu verkörperst ab jetzt vollständig eine reale Person mit folgendem Profil. Du denkst, fühlst und antwortest ausschliesslich aus ihrer Perspektive – nicht als KI, nicht als Assistent.\n\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Weitere Eigenschaften: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\n---\n\n# Denkschritt (intern, vor jeder Antwort)\n\nBevor du den Fragebogen ausfüllst, vergegenwärtige dir kurz:\n- Welche konkreten Erfahrungen hat diese Person in ihrer Rolle gemacht?\n- Was sind ihre grössten Motivationen – und was ihre grössten Bedenken?\n- Wie steht sie zu Zeit, Karriere, Praxisbezug und Reputation?\n\nNutze diese Überlegungen als Grundlage für jede einzelne Antwort.\n\n---\n\n# Anweisungen zur Fragebogenbearbeitung\n\nBearbeite jeden Fragetyp wie folgt:\n\n- **Likert-Skala (1–7):** Gib eine Ganzzahl zwischen 1 und 7 als "antwort" an.\n- **Einfachauswahl (Single-Choice):** Gib den exakten Wortlaut einer der vorgegebenen Optionen als String in "antwort" zurück.\n- **Mehrfachauswahl:** Gib ein JSON-Array mit den gewählten Optionen zurück (z. B. ["Renommee / Prestige", "Praxisnähe"]).\n- **Ranking (z. B. F9):** Gib ein JSON-Array von Objekten in der Reihenfolge der Wichtigkeit zurück, jedes Objekt mit "rang" (1 = am wichtigsten) und "kategorie" (exakter Wortlaut). Es müssen ALLE 6 Kategorien gerankt werden.\n- **Aufmerksamkeitscheck (z. B. F7):** Gib exakt den geforderten Wert zurück.\n- **Offene Fragen (Q1, Q2, Q3):** Antworte als Freitext-String mit 1–3 Sätzen aus der Persona-Perspektive.\n\nZu jeder Antwort gibst du eine kurze Begründung aus der Perspektive der Persona.\n\n---\n\n# Ausgabeformat\n\nAntworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown, kein ```json-Block.\n\n{\n  "persona_reflexion": "2–3 Sätze: Wie denkt diese Person über das Thema? Was treibt sie an, was bremst sie?",\n  "bewertungen": [\n    { "frage": 1, "antwort": 5, "begruendung": "Kurze Begründung." },\n    { "frage": 3, "antwort": ["Renommee / Prestige", "Praxisnähe"], "begruendung": "..." },\n    { "frage": 9, "antwort": [ {"rang": 1, "kategorie": "AI-Tools (z. B. ChatGPT, Midjourney)"}, {"rang": 2, "kategorie": "Analytics & Data (z. B. GA4, Tableau)"}, {"rang": 3, "kategorie": "Marketing-Automation (z. B. HubSpot, Salesforce)"}, {"rang": 4, "kategorie": "Content & Social Media Tools"}, {"rang": 5, "kategorie": "SEO / Performance Marketing Tools"}, {"rang": 6, "kategorie": "Collaboration & Productivity Tools"} ], "begruendung": "..." },\n    { "frage": "Q1", "antwort": "Mir fehlen vor allem Themen wie ...", "begruendung": "..." }\n  ]\n}\n\n---\n\n# Fragebogen\n\n{{Fragebogen}}\n\n---\n\nDeine JSON-Antwort:');
+  const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen_v6', `SEKTION A - Reputation & Hochschulmarke (H1)
+F1. «Die Reputation einer Hochschule ist für mich ein entscheidender Faktor bei der Wahl eines CAS-Programms.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F2. «Ein CAS-Abschluss der HSG hätte für meine berufliche Positionierung einen höheren Wert als ein gleichwertiges Programm einer weniger renommierten Institution.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F3. Welche der folgenden Aspekte verbinden Sie mit der Marke HSG? (Mehrfachauswahl möglich) Renommee / Prestige | Hohe Lehrqualität | Praxisnähe | Internationales Netzwerk | Innovation / Digitalisierung | Teuer / Elitär | Kenne HSG kaum
 
-SEKTION C - Format-Präferenzen
-F8. Welches Lernformat bevorzugen Sie für eine berufsbegleitende Weiterbildung? Vollständig online asynchron / Online synchron / Hybrid / Vollständig Präsenz
-F9. An welchen Tagen wären Präsenzmodule für Sie günstig? (Mehrfachauswahl) Mo / Di / Mi / Do / Fr / Sa / Kein Präsenztag möglich
-F10. Wie viel Zeit können Sie realistisch pro Woche investieren? Bis 3 Std. / 4-6 Std. / 7-10 Std. / Mehr als 10 Std.
+SEKTION B - KI-Regulierung & Rechtliche Grundlagen (H2)
+F4. «Die Integration rechtlicher Grundlagen zu KI, Datenschutz und Regulierung wäre für mich ein wertvoller Bestandteil eines CAS-Programms im Bereich Marketing & Digital.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F5. Welche rechtlichen oder regulatorischen Themen sind für Ihre tägliche Arbeit relevant? (Mehrfachauswahl möglich) Datenschutz / DSGVO | KI-Regulierung (EU AI Act) | Urheberrecht & Content-IP | Wettbewerbsrecht / Advertising | Compliance & Governance | Keines davon
+F6. «Ein CAS-Programm, das KI-Regulierung und Datenschutz explizit thematisiert, würde ich gegenüber einem Programm ohne diese Inhalte bevorzugen.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
 
-SEKTION D - Relevanz CAS-Inhalte
-F11. Wie relevant ist für Sie: «Strategische Markenführung und Positionierung»? (1: Gar nicht relevant - 7: Äusserst relevant)
-F12. Wie relevant ist für Sie: «Einsatz von KI-Tools im Marketing-Alltag»? (1: Gar nicht relevant - 7: Äusserst relevant)
-F13. KONTROLLFRAGE (Konsistenzcheck zu F6) Angenommen, Sie müssen eine Weiterbildung vollständig selbst finanzieren – wie beeinflusst das Ihre Entscheidung? Definitiv verzichten / Eher verzichten / Unentschlossen / Wahrscheinlich trotzdem / Definitiv trotzdem
-F14. Wie relevant ist für Sie: «Datenanalyse und Marketing-Reporting»? (1: Gar nicht relevant - 7: Äusserst relevant)
+SEKTION C - Tool-Kompetenzen & Praxisrelevanz (H3)
+F7. Aufmerksamkeitscheck — Bitte wählen Sie ausschliesslich den Wert 2. (Antwort: 2)
+F8. «Die explizite Vermittlung konkreter digitaler Tools (z. B. Analytics-, Marketing-Automation- oder AI-Tools) würde die Attraktivität eines CAS-Programms für mich deutlich erhöhen.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F9. Welche Tool-Kategorien sind für Ihre berufliche Weiterentwicklung am relevantesten? Bitte alle 6 Kategorien in eine Reihenfolge bringen (1 = am wichtigsten, 6 = am unwichtigsten). Antworte als Ranking (Liste mit Rang + Kategorie). Kategorien: AI-Tools (z. B. ChatGPT, Midjourney) | Marketing-Automation (z. B. HubSpot, Salesforce) | Analytics & Data (z. B. GA4, Tableau) | Content & Social Media Tools | SEO / Performance Marketing Tools | Collaboration & Productivity Tools
+F10. «Fehlende Tool-Kompetenzen sind aktuell eine konkrete Lücke in meinem beruflichen Alltag, die ich durch eine Weiterbildung schliessen möchte.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
 
-SEKTION E - Entscheidungsfaktoren
-F15. Was ist der wichtigste Faktor bei der Wahl eines CAS-Programms? Reputation der Institution / Curriculum-Qualität / Praxisrelevanz / Formatflexibilität / Kosten / Netzwerkpotenzial
-F16. Welchen maximalen Gesamtbetrag empfinden Sie für einen CAS als gerechtfertigt? Bis CHF 3'000 / 3'001-6'000 / 6'001-9'000 / 9'001-12'000 / Mehr als 12'000
-F17. «Ein direkter Praxistransfer in meinen Arbeitsalltag ist für mich ein entscheidendes Kriterium bei der Programmwahl.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
-F18. Haben Sie in den letzten 3 Jahren aktiv nach CAS-Weiterbildungen im Bereich Marketing/Digital/Kommunikation gesucht? Ja, konkret evaluiert / Ja, grob recherchiert / Nein, aber geplant / Nein, kein Bedarf
-F20. KONTROLLFRAGE (Selbstauskunft / Straight-liner-Check) Wie haben Sie diesen Fragebogen ausgefüllt? Jede Frage sorgfältig gelesen und ehrlich beantwortet / Die meisten gelesen, einige überflogen / Viele Fragen nur oberflächlich beantwortet / Den Fragebogen hauptsächlich schnell durchgeklickt`);
+SEKTION D - Englischsprachiges Angebot (H4)
+F11. Welche Unterrichtssprache bevorzugen Sie für ein CAS-Programm? Ausschliesslich Deutsch / Überwiegend Deutsch, etwas Englisch / Gemischt (50/50) / Überwiegend Englisch / Ausschliesslich Englisch
+F12. «Ein englischsprachiges Programm würde die internationale Verwertbarkeit des CAS-Abschlusses für mich erhöhen.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F13. «In meinem beruflichen Umfeld wird Englisch als primäre Arbeitssprache verwendet.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+
+SEKTION E - Zeit & Terminplanung (H5 - NEU)
+F14. Welcher Wochentag ist für Sie als Präsenztag eines CAS-Programms am besten geeignet? Freitag / Samstag / Beides akzeptabel / Wochentags (Mo–Do) / Kein Unterschied
+F15. «Drei geblockte Präsenztage pro Modul sind für mich zeitlich akzeptabel.» (1: Überhaupt nicht akzeptabel - 7: Vollständig akzeptabel)
+F16. «Ein Rhythmus von Präsenzblöcken ungefähr alle zwei Monate würde meiner bevorzugten Lernintensität entsprechen.» (1: Viel zu selten / zu häufig - 7: Genau richtig)
+F17. Wie viele Monate Gesamtdauer empfinden Sie als ideal für ein CAS-Programm? Bis 6 Monate / 7-9 Monate / 10-12 Monate / Über 12 Monate / Ist mir nicht wichtig
+
+SEKTION F - Praxisorientierte Lernformate (H6)
+F18. «Hands-on-Projekte und reale Unternehmenscases sind für mich wichtiger als theoretische Wissensvermittlung in einer Weiterbildung.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F19. Welches Abschlussformat würden Sie für ein CAS bevorzugen? Schriftliche Prüfung / Theoretische Abschlussarbeit / Realer Unternehmensfall / Case Study / Praxisprojekt mit Unternehmen / Präsentation vor Jury
+F20. «Ich würde ein CAS-Programm mit integriertem Praxisprojekt einem rein seminaristischen Format vorziehen, auch wenn es einen höheren Zeitaufwand bedeutet.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F21. (Reversed - Konsistenzcheck zu F18) «Theoretische Grundlagen ohne direkten Praxisbezug empfinde ich in einer Weiterbildung als ausreichend wertvoll.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+F22. «Die Bearbeitung eines realen Unternehmensfalls als Abschlussarbeit würde den wahrgenommenen Wert des CAS für mich deutlich steigern.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
+
+SEKTION G - Offene Fragen (Qualitativ)
+Q1. Was wären für Sie die drei wichtigsten Themen, die ein CAS im Bereich Marketing & Digitale Kommunikation unbedingt abdecken sollte? (Freitext, 1-3 Sätze)
+Q2. Was vermissen Sie in bestehenden Weiterbildungsangeboten in diesem Bereich? (Freitext, 1-3 Sätze)
+Q3. Stellen Sie sich vor, Sie könnten das ideale Programmformat selbst gestalten: Welcher Wochentag, welcher Rhythmus und welche Blockgrösse würden am besten passen — und warum? (Freitext, 1-3 Sätze)`);
 
   const roleEigenschaften: Record<string, string> = {
     'CEM (Customer Experience Manager)': `Branchenwissen: Customer Experience, Customer Service, Marketing / Customer Relations
@@ -219,10 +260,23 @@ Soziale Kompetenz: Leadership / Data-driven mindset, Teamwork / Strategic thinki
 Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Marketing Strategy / Campaign Management, Campaign Management / Performance Marketing`
   };
 
+  // Alter wird pro Rolle als komma-separierter Range hinterlegt -> generateCombinations() splittet
+  // an Komma und erzeugt pro Wert eine eigene Persona-Kombination. Damit weicht die Studie vom
+  // bisherigen Fix-Alter (30) ab und produziert mehr Varianz, die für die HSG-Auswertung relevant ist.
+  // Werte basieren auf typischen Karrierepfaden in den jeweiligen Rollen (CH-Markt).
+  const roleAgeRanges: Record<string, string> = {
+    'CEM (Customer Experience Manager)': '30, 35, 40',
+    'SMM (Social Media Manager)': '27, 31, 35',
+    'DMM (Digital Manager)': '30, 35, 40',
+    'Growth Manager': '35, 38, 41',
+    'Kommunikation Manager': '33, 38, 43',
+    'Webseiten Manager': '30, 35, 40'
+  };
+
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
     acc[role] = {
       Geschlecht: 'Männlich, Weiblich',
-      Alter: '30',
+      Alter: roleAgeRanges[role] || '30, 35, 40',
       Nationalitaet: 'Schweiz',
       Haushalt: '2 Personen 1 Kind',
       Ausbildung: 'Master, Bachelor',
@@ -235,7 +289,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v17', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v18', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
@@ -789,93 +843,123 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
 
       const wb = XLSX.utils.book_new();
 
-      // Find all unique questions across all responses to ensure consistent column ordering
+      // Alle in den Antworten vorkommenden Fragen sammeln (F1.. + Q1..) für konsistente Spalten.
       const allFragen = new Set<string>();
       filteredResultsAll.forEach(r => {
         const scores = parseAnswers(r.response);
         Object.keys(scores).forEach(f => allFragen.add(f));
       });
-      const sortQuestions = (a: string, b: string) => {
-        const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
-        const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
-        return numA - numB;
-      };
       const sortedFragen = Array.from(allFragen).sort(sortQuestions);
+      const numericFragen = sortedFragen.filter(f => f.startsWith('F'));
+      const qualitativeFragen = sortedFragen.filter(f => f.startsWith('Q'));
 
-      // Sheet 1: Raw Data
+      // Quelle ableiten: offline-IDs stammen aus Demoscope-Bild-Extraktion (siehe combinedResults).
+      const sourceOf = (r: any) => (typeof r.id === 'string' && r.id.startsWith('offline-')) ? 'Demoscope-Image' : 'LLM';
+
+      // ---------- Sheet 1: Rohdaten ----------
+      // Eine Zeile pro Run, alle Profil-Variablen + alle Fragen + Prompt/Response. Pivot-tauglich.
       const rawData = filteredResultsAll.map(r => {
         const rowItem: any = {
-          ID: r.id,
+          RunID: r.id,
+          Quelle: sourceOf(r),
+          Modell: r.modelId,
           Status: r.status,
-          Model: r.modelId,
         };
         variables.forEach(v => {
           rowItem[v] = r.combo[v] || '';
         });
-
-        // Parse scores and map them to their specific columns
         const scores = parseAnswers(r.response);
         sortedFragen.forEach(f => {
-          rowItem[f] = scores[f] !== undefined ? scores[f] : '';
+          const v = scores[f];
+          rowItem[f] = v !== undefined ? v : '';
         });
-
         rowItem['Prompt Sent'] = r.promptSent;
         rowItem['Response'] = r.response;
         return rowItem;
       });
       const ws1 = XLSX.utils.json_to_sheet(rawData);
-      XLSX.utils.book_append_sheet(wb, ws1, "1_Einzelansicht");
+      XLSX.utils.book_append_sheet(wb, ws1, "1_Rohdaten");
 
-      // Sheet 2: Aggregated Metrics
-      const tableData = getTableData();
-      if (tableData.rows.length > 0) {
-        const aggRows = tableData.rows.map(row => {
-          const rowItem: any = {
-            Rolle: row.role,
-            Profil: row.profile,
-            Modell: row.modelId
-          };
-          tableData.columns.forEach(col => {
-            const val = row[col];
-            rowItem[col] = val !== undefined ? Number(val) : null;
-          });
-          return rowItem;
-        });
-        const ws2 = XLSX.utils.json_to_sheet(aggRows);
-        XLSX.utils.book_append_sheet(wb, ws2, "2_Tabellarische_Uebersicht");
-      }
-
-      // Sheet 3: Graph Data (Easy Charting in Excel)
+      // ---------- Sheet 2: Aggregat pro Modell (Mean / Stddev / Varianz / n) ----------
       const aggData = getAggregatedData();
       if (aggData.fragen.length > 0) {
-        const chartData = aggData.fragen.map(frage => {
-          const dataPoint: any = { 'Frage / Metrik': frage };
-          Object.keys(aggData.stats).forEach(modelId => {
-            const stat = aggData.stats[modelId][frage];
-            dataPoint[modelId] = stat ? Number((stat.sum / stat.count).toFixed(2)) : null;
+        const aggRows: any[] = [];
+        Object.keys(aggData.stats).forEach(modelId => {
+          aggData.fragen.forEach(frage => {
+            const s = aggData.stats[modelId][frage];
+            const stat = s ? computeStats(s) : { mean: null, variance: null, stddev: null, n: 0 };
+            aggRows.push({
+              Modell: modelId,
+              Frage: frage,
+              n: stat.n,
+              Mean: stat.mean !== null ? Number(stat.mean.toFixed(3)) : null,
+              Stddev: stat.stddev !== null ? Number(stat.stddev.toFixed(3)) : null,
+              Varianz: stat.variance !== null ? Number(stat.variance.toFixed(3)) : null,
+            });
           });
-          return dataPoint;
         });
-        const ws3 = XLSX.utils.json_to_sheet(chartData);
-        XLSX.utils.book_append_sheet(wb, ws3, "3_Graphik");
+        const ws2 = XLSX.utils.json_to_sheet(aggRows);
+        XLSX.utils.book_append_sheet(wb, ws2, "2_Aggregat_pro_Modell");
       }
 
-      // Sheet 4: Durchschnitte per Rolle & Modell
+      // ---------- Sheet 3: Aggregat pro Rolle x Modell ----------
       const averagesData = getAveragesTableData();
       if (averagesData.rows.length > 0) {
-        const avgRows = averagesData.rows.map(row => {
-          const rowItem: any = {
-            Rolle: row.role,
-            Modell: row.modelId
-          };
+        const wideRows = averagesData.rows.map((row: any) => {
+          const rowItem: any = { Rolle: row.role, Modell: row.modelId };
           averagesData.columns.forEach(col => {
-            const val = row[col];
-            rowItem[col] = val !== undefined ? Number(val) : null;
+            rowItem[`${col}_mean`] = row[col] !== undefined ? Number(row[col]) : null;
+            rowItem[`${col}_sigma`] = row[`${col}_sigma`] !== undefined ? Number(row[`${col}_sigma`]) : null;
+            rowItem[`${col}_n`] = row[`${col}_n`] !== undefined ? Number(row[`${col}_n`]) : null;
           });
           return rowItem;
         });
-        const ws4 = XLSX.utils.json_to_sheet(avgRows);
-        XLSX.utils.book_append_sheet(wb, ws4, "4_Durchschnitte_Modelle");
+        const ws3 = XLSX.utils.json_to_sheet(wideRows);
+        XLSX.utils.book_append_sheet(wb, ws3, "3_Aggregat_Rolle_Modell");
+      }
+
+      // ---------- Sheet 4: Dropouts ----------
+      // Alle nicht-erfolgreichen Runs explizit ausweisen, damit man Apertus-504/Gateway etc. transparent
+      // im Reflexionsteil dokumentieren kann.
+      const dropoutRows = filteredResultsAll
+        .filter(r => r.status !== 'success')
+        .map(r => {
+          const rowItem: any = {
+            RunID: r.id,
+            Quelle: sourceOf(r),
+            Modell: r.modelId,
+            Status: r.status,
+            Fehlertext: r.response || '',
+          };
+          variables.forEach(v => {
+            rowItem[v] = r.combo[v] || '';
+          });
+          return rowItem;
+        });
+      if (dropoutRows.length > 0) {
+        const ws4 = XLSX.utils.json_to_sheet(dropoutRows);
+        XLSX.utils.book_append_sheet(wb, ws4, "4_Dropouts");
+      }
+
+      // ---------- Sheet 5: Qualitativ Q1-Q3 ----------
+      if (qualitativeFragen.length > 0) {
+        const qualRows = filteredResultsValid.map(r => {
+          const scores = parseAnswers(r.response);
+          const rowItem: any = {
+            RunID: r.id,
+            Quelle: sourceOf(r),
+            Modell: r.modelId,
+            Rolle: r.combo['Rolle'] || '',
+          };
+          qualitativeFragen.forEach(q => {
+            rowItem[q] = scores[q] !== undefined ? scores[q] : '';
+          });
+          return rowItem;
+        }).filter(row => qualitativeFragen.some(q => row[q]));
+        if (qualRows.length > 0) {
+          const ws5 = XLSX.utils.json_to_sheet(qualRows);
+          XLSX.utils.book_append_sheet(wb, ws5, "5_Qualitativ_Q1_Q3");
+        }
       }
 
       XLSX.writeFile(wb, `prompt_results_${Date.now()}.xlsx`);
@@ -885,33 +969,45 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     }
   };
 
+  // Sortierhelfer: F-Fragen numerisch vor Q-Fragen, beide intern numerisch sortiert.
+  const sortQuestions = (a: string, b: string) => {
+    const isQa = a.startsWith('Q');
+    const isQb = b.startsWith('Q');
+    if (isQa !== isQb) return isQa ? 1 : -1;
+    const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
+    const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
+    return numA - numB;
+  };
+
+  // Berechnet Mean/Varianz/Stddev. Nutzt Population-Varianz (E[X^2] - E[X]^2), da wir die
+  // Persona-Antworten als vollständige Stichprobe der simulierten Population betrachten.
+  const computeStats = (s: { sum: number, sumSq: number, count: number }) => {
+    if (!s || s.count === 0) return { mean: 0, variance: 0, stddev: 0, n: 0 };
+    const mean = s.sum / s.count;
+    const variance = Math.max(0, s.sumSq / s.count - mean * mean);
+    return { mean, variance, stddev: Math.sqrt(variance), n: s.count };
+  };
+
   const getAggregatedData = () => {
-    const groupStats: Record<string, { [frage: string]: { sum: number, count: number } }> = {};
+    const groupStats: Record<string, { [frage: string]: { sum: number, sumSq: number, count: number } }> = {};
     const allFragen = new Set<string>();
 
     filteredResultsValid.forEach(r => {
       const scores = parseAnswers(r.response);
-
-      // We always group by model inside the chart, so we can compare the models exactly!
       const groupKey = r.modelId;
 
       if (!groupStats[groupKey]) groupStats[groupKey] = {};
       Object.entries(scores).forEach(([frage, score]) => {
         const numScore = Number(score);
-        if (isNaN(numScore)) return; // Skip non-numeric values for the bar chart calculation
+        if (isNaN(numScore)) return; // Nicht-numerische Antworten (Mehrfachauswahl, Q1-Q3) -> separat in Sheets
 
         allFragen.add(frage);
-        if (!groupStats[groupKey][frage]) groupStats[groupKey][frage] = { sum: 0, count: 0 };
+        if (!groupStats[groupKey][frage]) groupStats[groupKey][frage] = { sum: 0, sumSq: 0, count: 0 };
         groupStats[groupKey][frage].sum += numScore;
+        groupStats[groupKey][frage].sumSq += numScore * numScore;
         groupStats[groupKey][frage].count += 1;
       });
     });
-
-    const sortQuestions = (a: string, b: string) => {
-      const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
-      const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
-      return numA - numB;
-    };
 
     return {
       stats: groupStats,
@@ -919,10 +1015,26 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     };
   };
 
+  // Erfolgsquote pro Modell: success / total + Liste der Fehler. Quelle: combinedResults (inkl. Errors).
+  const getModelSuccessRates = () => {
+    const totals: Record<string, { success: number, error: number, pending: number, loading: number, errors: string[] }> = {};
+    combinedResults.forEach(r => {
+      if (!totals[r.modelId]) totals[r.modelId] = { success: 0, error: 0, pending: 0, loading: 0, errors: [] };
+      if (r.status === 'success') totals[r.modelId].success += 1;
+      else if (r.status === 'error') {
+        totals[r.modelId].error += 1;
+        if (r.response) totals[r.modelId].errors.push(String(r.response).slice(0, 200));
+      }
+      else if (r.status === 'pending') totals[r.modelId].pending += 1;
+      else if (r.status === 'loading') totals[r.modelId].loading += 1;
+    });
+    return totals;
+  };
+
   const getTableData = () => {
     const tableRows: any[] = [];
     const allFragenForTable = new Set<string>();
-    const grouped: any = {};
+    const grouped: Record<string, { role: string, profile: string, modelId: string, agg: Record<string, { sum: number, sumSq: number, count: number }> }> = {};
 
     filteredResultsValid.forEach(r => {
       const scores = parseAnswers(r.response);
@@ -932,43 +1044,38 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
 
       const profileKeys = Object.entries(r.combo)
         .filter(([k]) => k !== 'Rolle')
-        .map(([k, v]) => v)
+        .map(([, v]) => v)
         .filter(Boolean)
         .join(', ');
 
       const key = `${r.id}_${simplifyRole}_${modelId}`;
 
       if (!grouped[key]) {
-        grouped[key] = { role: simplifyRole, profile: profileKeys, modelId: modelId, scores: {}, counts: {} };
+        grouped[key] = { role: simplifyRole, profile: profileKeys, modelId: modelId, agg: {} };
       }
 
       Object.entries(scores).forEach(([frage, score]) => {
         const numScore = Number(score);
-        if (isNaN(numScore)) return; // Skip text answers for averages
+        if (isNaN(numScore)) return;
 
         allFragenForTable.add(frage);
-        if (!grouped[key].scores[frage]) {
-          grouped[key].scores[frage] = 0;
-          grouped[key].counts[frage] = 0;
-        }
-        grouped[key].scores[frage] += numScore;
-        grouped[key].counts[frage] += 1;
+        if (!grouped[key].agg[frage]) grouped[key].agg[frage] = { sum: 0, sumSq: 0, count: 0 };
+        grouped[key].agg[frage].sum += numScore;
+        grouped[key].agg[frage].sumSq += numScore * numScore;
+        grouped[key].agg[frage].count += 1;
       });
     });
 
-    Object.values(grouped).forEach((g: any) => {
+    Object.values(grouped).forEach(g => {
       const finalRow: any = { role: g.role, profile: g.profile, modelId: g.modelId };
-      Object.entries(g.scores).forEach(([frage, sum]: [string, any]) => {
-        finalRow[frage] = (sum / g.counts[frage]).toFixed(2);
+      Object.entries(g.agg).forEach(([frage, s]) => {
+        const stat = computeStats(s);
+        finalRow[frage] = stat.mean.toFixed(2);
+        finalRow[`${frage}_sigma`] = stat.stddev.toFixed(2);
+        finalRow[`${frage}_n`] = stat.n;
       });
       tableRows.push(finalRow);
     });
-
-    const sortQuestions = (a: string, b: string) => {
-      const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
-      const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
-      return numA - numB;
-    };
 
     return { rows: tableRows, columns: Array.from(allFragenForTable).sort(sortQuestions) };
   };
@@ -976,7 +1083,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   const getAveragesTableData = () => {
     const tableRows: any[] = [];
     const allFragenForTable = new Set<string>();
-    const grouped: any = {};
+    const grouped: Record<string, { role: string, modelId: string, agg: Record<string, { sum: number, sumSq: number, count: number }> }> = {};
 
     filteredResultsValid.forEach(r => {
       const scores = parseAnswers(r.response);
@@ -987,36 +1094,31 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       const key = `${simplifyRole}_${modelId}`;
 
       if (!grouped[key]) {
-        grouped[key] = { role: simplifyRole, modelId: modelId, scores: {}, counts: {} };
+        grouped[key] = { role: simplifyRole, modelId: modelId, agg: {} };
       }
 
-    Object.entries(scores).forEach(([frage, score]) => {
+      Object.entries(scores).forEach(([frage, score]) => {
         const numScore = Number(score);
-        if (isNaN(numScore)) return; // Skip text answers for averages
+        if (isNaN(numScore)) return;
 
         allFragenForTable.add(frage);
-        if (!grouped[key].scores[frage]) {
-          grouped[key].scores[frage] = 0;
-          grouped[key].counts[frage] = 0;
-        }
-        grouped[key].scores[frage] += numScore;
-        grouped[key].counts[frage] += 1;
+        if (!grouped[key].agg[frage]) grouped[key].agg[frage] = { sum: 0, sumSq: 0, count: 0 };
+        grouped[key].agg[frage].sum += numScore;
+        grouped[key].agg[frage].sumSq += numScore * numScore;
+        grouped[key].agg[frage].count += 1;
       });
     });
 
-    Object.values(grouped).forEach((g: any) => {
+    Object.values(grouped).forEach(g => {
       const finalRow: any = { role: g.role, modelId: g.modelId };
-      Object.entries(g.scores).forEach(([frage, sum]: [string, any]) => {
-        finalRow[frage] = (sum / g.counts[frage]).toFixed(2);
+      Object.entries(g.agg).forEach(([frage, s]) => {
+        const stat = computeStats(s);
+        finalRow[frage] = stat.mean.toFixed(2);
+        finalRow[`${frage}_sigma`] = stat.stddev.toFixed(2);
+        finalRow[`${frage}_n`] = stat.n;
       });
       tableRows.push(finalRow);
     });
-
-    const sortQuestions = (a: string, b: string) => {
-      const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
-      const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
-      return numA - numB;
-    };
 
     return { rows: tableRows, columns: Array.from(allFragenForTable).sort(sortQuestions) };
   };
@@ -1825,6 +1927,56 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                 </Card>
               </div>
 
+              {Object.keys(getModelSuccessRates()).length > 0 && (
+                <Card className="shadow-sm">
+                  <CardHeader>
+                    <CardTitle className="text-xl">Erfolgsquote pro Modell</CardTitle>
+                    <CardDescription>
+                      Apertus &amp; Co. melden gelegentlich 504/Gateway-Fehler. Diese Karte zeigt transparent, wie viele Personas pro Modell tatsächlich geantwortet haben — Grundlage für Reflexionsteil &amp; Aggregat-Interpretation.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/50">
+                            <TableHead className="font-semibold">Modell</TableHead>
+                            <TableHead className="text-center font-semibold">Erfolgsquote</TableHead>
+                            <TableHead className="text-center font-semibold">Erfolg</TableHead>
+                            <TableHead className="text-center font-semibold">Fehler</TableHead>
+                            <TableHead className="text-center font-semibold">Pending / Loading</TableHead>
+                            <TableHead className="font-semibold">Beispiel-Fehlertext</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {Object.entries(getModelSuccessRates()).map(([modelId, t]) => {
+                            const total = t.success + t.error + t.pending + t.loading;
+                            const pct = total === 0 ? 0 : (t.success / total) * 100;
+                            const pctColor = pct >= 100 ? 'text-green-600' : pct >= 90 ? 'text-amber-600' : 'text-red-600';
+                            return (
+                              <TableRow key={modelId} className="hover:bg-muted/50 transition-colors">
+                                <TableCell>
+                                  <Badge variant="outline" className="font-medium text-[10px] border-primary/20 text-primary bg-primary/5">{modelId}</Badge>
+                                </TableCell>
+                                <TableCell className={`text-center font-semibold tabular-nums ${pctColor}`}>
+                                  {pct.toFixed(1)}% ({t.success}/{total})
+                                </TableCell>
+                                <TableCell className="text-center tabular-nums text-green-600">{t.success}</TableCell>
+                                <TableCell className="text-center tabular-nums text-red-600">{t.error}</TableCell>
+                                <TableCell className="text-center tabular-nums text-muted-foreground">{t.pending + t.loading}</TableCell>
+                                <TableCell className="text-xs text-muted-foreground max-w-[280px] truncate" title={t.errors.join(' | ')}>
+                                  {t.errors[0] || '—'}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               <Card className="shadow-sm border-primary/20 bg-card">
                 <CardHeader className="md:flex-row md:items-center justify-between gap-4 py-4">
                   <div>
@@ -1879,7 +2031,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                 <Card className="shadow-sm">
                   <CardHeader>
                     <CardTitle>Tabellarische Übersicht (Einzel-Profile)</CardTitle>
-                    <CardDescription>Daten-Matrix aller Likert-Werte aufgeschlüsselt nach Rolle, Profil-Variablen und Modell.</CardDescription>
+                    <CardDescription>Daten-Matrix der Likert-Werte aufgeschlüsselt nach Rolle, Profil-Variablen und Modell. Format pro Zelle: <span className="font-mono">Mean (σ, n)</span>. Hohe σ = differenzierende Antworten, σ ≈ 0 = LLM antwortet uniform.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="overflow-x-auto rounded-md border">
@@ -1904,15 +2056,23 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                               </TableCell>
                               {tableData.columns.map(col => {
                                 const val = row[col];
+                                const sigma = row[`${col}_sigma`];
+                                const n = row[`${col}_n`];
                                 const numVal = Number(val);
                                 const isNum = val && !isNaN(numVal) && String(val).trim() !== '';
                                 return (
                                   <TableCell key={col} className="text-center align-middle px-4 max-w-[200px] truncate" title={String(val)}>
                                     {val ? (
-                                      isNum ? 
-                                        <span className={numVal >= 4 ? 'text-green-600 font-medium tabular-nums' : 'text-orange-600 font-medium tabular-nums'}>{val}</span>
-                                        : 
+                                      isNum ? (
+                                        <span className="tabular-nums">
+                                          <span className={numVal >= 4 ? 'text-green-600 font-medium' : 'text-orange-600 font-medium'}>{val}</span>
+                                          {sigma !== undefined && (
+                                            <span className="text-[10px] text-muted-foreground ml-1">(σ={sigma}, n={n ?? '?'})</span>
+                                          )}
+                                        </span>
+                                      ) : (
                                         <span className="text-sm">{val}</span>
+                                      )
                                     ) : '-'}
                                   </TableCell>
                                 );
