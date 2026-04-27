@@ -261,35 +261,36 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   };
 
   // Alters- und Berufserfahrungs-Ranges pro Rolle. Quelle: manuelle Recherche (Ole, Screenshot 27.04.2026).
-  // generateCombinations() splittet an Komma -> jeder Wert erzeugt eine eigene Persona-Kombination.
-  // Pro Range werden die beiden Endwerte hinterlegt (min/max), damit die Kombinatorik
-  // (Age x WorkExp x Gender x Education = 16 pro Rolle) handhabbar bleibt.
+  // Werte werden als zusammenhängender Range-String (z. B. "23-26") in den Persona-Prompt injiziert,
+  // sodass das LLM bei T=0.7 selbst einen plausiblen Wert innerhalb des Ranges für die Persona wählt.
+  // Damit kein Komma -> generateCombinations() erzeugt nur 1 Variante pro Range, Kombinatorik bleibt
+  // bei 1 (Alter) x 1 (WorkExp) x 2 (Gender) x 2 (Education) = 4 Personas pro Rolle = 24 total.
   const roleAgeRanges: Record<string, string> = {
-    'CEM (Customer Experience Manager)': '23, 26',           // 23-26 Jahre
-    'SMM (Social Media Manager)': '25, 31',                  // 25-31 Jahre
-    'DMM (Digital Manager)': '22, 28',                       // 22-28 Jahre
-    'Growth Manager': '26, 30',                              // 26-30 Jahre
-    'Kommunikation Manager': '22, 25',                       // 22-25 Jahre
-    'Webseiten Manager': '24, 28'                            // 24-28 Jahre
+    'CEM (Customer Experience Manager)': '23-26 Jahre',
+    'SMM (Social Media Manager)': '25-31 Jahre',
+    'DMM (Digital Manager)': '22-28 Jahre',
+    'Growth Manager': '26-30 Jahre',
+    'Kommunikation Manager': '22-25 Jahre',
+    'Webseiten Manager': '24-28 Jahre'
   };
 
   const roleWorkExperience: Record<string, string> = {
-    'CEM (Customer Experience Manager)': '5 Jahre, 7 Jahre', // 5-7 Jahre
-    'SMM (Social Media Manager)': '2 Jahre, 5 Jahre',        // 2-5 Jahre
-    'DMM (Digital Manager)': '2 Jahre, 4 Jahre',             // 2-4 Jahre
-    'Growth Manager': '2 Jahre, 4 Jahre',                    // 2-4 Jahre
-    'Kommunikation Manager': '4 Jahre, 6 Jahre',             // 4-6 Jahre
-    'Webseiten Manager': '5 Jahre, 7 Jahre'                  // 5-7 Jahre
+    'CEM (Customer Experience Manager)': '5-7 Jahre',
+    'SMM (Social Media Manager)': '2-5 Jahre',
+    'DMM (Digital Manager)': '2-4 Jahre',
+    'Growth Manager': '2-4 Jahre',
+    'Kommunikation Manager': '4-6 Jahre',
+    'Webseiten Manager': '5-7 Jahre'
   };
 
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
     acc[role] = {
       Geschlecht: 'Männlich, Weiblich',
-      Alter: roleAgeRanges[role] || '25, 30',
+      Alter: roleAgeRanges[role] || '25-30 Jahre',
       Nationalitaet: 'Schweiz',
       Haushalt: '2 Personen 1 Kind',
       Ausbildung: 'Master, Bachelor',
-      Berufserfahrung: roleWorkExperience[role] || '3 Jahre',
+      Berufserfahrung: roleWorkExperience[role] || '3-5 Jahre',
       Wohnsitzland: 'Schweiz',
       Postleitzahl: '9000',
       Avatar_Eigenschaften_und_Praeferenzen: roleEigenschaften[role] || ''
@@ -298,7 +299,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v19', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v20', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
