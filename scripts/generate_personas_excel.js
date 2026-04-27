@@ -6,58 +6,35 @@
 const XLSX = require('xlsx');
 const path = require('path');
 
+// Erfahrungs-Range pro Rolle (Recherche Ole). Alter ist studienweit fix 20-29 Jahre.
 const ROLES = [
-  {
-    rolle: 'CEM (Customer Experience Manager)',
-    alter: '23-26 Jahre',
-    erfahrung: '5-7 Jahre',
-  },
-  {
-    rolle: 'SMM (Social Media Manager)',
-    alter: '25-31 Jahre',
-    erfahrung: '2-5 Jahre',
-  },
-  {
-    rolle: 'DMM (Digital Manager)',
-    alter: '22-28 Jahre',
-    erfahrung: '2-4 Jahre',
-  },
-  {
-    rolle: 'Growth Manager',
-    alter: '26-30 Jahre',
-    erfahrung: '2-4 Jahre',
-  },
-  {
-    rolle: 'Kommunikation Manager',
-    alter: '22-25 Jahre',
-    erfahrung: '4-6 Jahre',
-  },
-  {
-    rolle: 'Webseiten Manager',
-    alter: '24-28 Jahre',
-    erfahrung: '5-7 Jahre',
-  },
+  { rolle: 'CEM (Customer Experience Manager)', erfahrung: '5-7 Jahre' },
+  { rolle: 'SMM (Social Media Manager)',        erfahrung: '2-5 Jahre' },
+  { rolle: 'DMM (Digital Manager)',             erfahrung: '2-4 Jahre' },
+  { rolle: 'Growth Manager',                    erfahrung: '2-4 Jahre' },
+  { rolle: 'Kommunikation Manager',             erfahrung: '4-6 Jahre' },
+  { rolle: 'Webseiten Manager',                 erfahrung: '5-7 Jahre' },
 ];
 
 const GESCHLECHTER = ['Männlich', 'Weiblich'];
-const HAUSHALTE = ['1 Person kein Kind', '2 Personen 1 Kind'];
+const PLZ_VARIANTEN = ['9000', '9403'];
 
 const rows = [];
 let id = 1;
 for (const r of ROLES) {
   for (const g of GESCHLECHTER) {
-    for (const h of HAUSHALTE) {
+    for (const plz of PLZ_VARIANTEN) {
       rows.push({
         ID: id++,
         Rolle: r.rolle,
         Geschlecht: g,
-        Alter: r.alter,
+        Alter: '20-29 Jahre',
         Nationalitaet: 'Schweiz',
-        Haushalt: h,
-        Ausbildung: 'Bachelor / Master',
+        Haushalt: '2 Personen 1 Kind',
+        Ausbildung: 'Bachelor',
         Berufserfahrung: r.erfahrung,
         Wohnsitzland: 'Schweiz',
-        Postleitzahl: '9000',
+        Postleitzahl: plz,
       });
     }
   }
@@ -66,7 +43,6 @@ for (const r of ROLES) {
 const wb = XLSX.utils.book_new();
 const ws = XLSX.utils.json_to_sheet(rows);
 
-// Spaltenbreiten setzen, damit die Ausgabe direkt lesbar ist.
 ws['!cols'] = [
   { wch: 4 },   // ID
   { wch: 36 },  // Rolle
