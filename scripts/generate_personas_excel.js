@@ -1,13 +1,11 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-// Generiert personas_24.xlsx mit allen 24 Persona-Kombinationen,
-// passend zu generateCombinations() in src/app/page.tsx.
+// Generiert personas_24.xlsx mit einer Zeile pro Rolle und den Spalten
+// Jobbezeichnung, Jobbeschreibung, Avatar Eigenschaften, Präferenzen.
 // Aufruf: node scripts/generate_personas_excel.js
 
 const XLSX = require('xlsx');
 const path = require('path');
 
-// Rollen mit ausgeschriebener Jobbezeichnung, kurzer Jobbeschreibung
-// (max. 3 Sätze), Avatar-Eigenschaften und Präferenzen.
 const ROLES = [
   {
     jobbezeichnung: 'Customer Experience Manager',
@@ -65,51 +63,24 @@ const ROLES = [
   },
 ];
 
-const GESCHLECHTER = ['Männlich', 'Weiblich'];
-const HAUSHALTE = ['1 Person kein Kind', '2 Personen 1 Kind'];
-
-const rows = [];
-let id = 1;
-for (const r of ROLES) {
-  for (const g of GESCHLECHTER) {
-    for (const h of HAUSHALTE) {
-      rows.push({
-        ID: id++,
-        Jobbezeichnung: r.jobbezeichnung,
-        Jobbeschreibung: r.jobbeschreibung,
-        'Avatar Eigenschaften': r.eigenschaften,
-        'Präferenzen': r.praeferenzen,
-        Geschlecht: g,
-        Alter: '20-29 Jahre',
-        Nationalitaet: 'Schweiz',
-        Haushalt: h,
-        Ausbildung: 'Bachelor',
-        Wohnsitzland: 'Schweiz',
-        Postleitzahl: '9000',
-      });
-    }
-  }
-}
+const rows = ROLES.map((r) => ({
+  Jobbezeichnung: r.jobbezeichnung,
+  Jobbeschreibung: r.jobbeschreibung,
+  'Avatar Eigenschaften': r.eigenschaften,
+  'Präferenzen': r.praeferenzen,
+}));
 
 const wb = XLSX.utils.book_new();
 const ws = XLSX.utils.json_to_sheet(rows);
 
 ws['!cols'] = [
-  { wch: 4 },   // ID
   { wch: 30 },  // Jobbezeichnung
   { wch: 90 },  // Jobbeschreibung
   { wch: 60 },  // Avatar Eigenschaften
   { wch: 60 },  // Präferenzen
-  { wch: 11 },  // Geschlecht
-  { wch: 13 },  // Alter
-  { wch: 13 },  // Nationalitaet
-  { wch: 22 },  // Haushalt
-  { wch: 18 },  // Ausbildung
-  { wch: 13 },  // Wohnsitzland
-  { wch: 11 },  // Postleitzahl
 ];
 
-XLSX.utils.book_append_sheet(wb, ws, 'Personas_24');
+XLSX.utils.book_append_sheet(wb, ws, 'Personas');
 
 const outPath = path.join(__dirname, '..', 'personas_24.xlsx');
 XLSX.writeFile(wb, outPath);
