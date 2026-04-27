@@ -229,32 +229,38 @@ Q2. Was vermissen Sie in bestehenden Weiterbildungsangeboten in diesem Bereich? 
 Q3. Stellen Sie sich vor, Sie könnten das ideale Programmformat selbst gestalten: Welcher Wochentag, welcher Rhythmus und welche Blockgrösse würden am besten passen — und warum? (Freitext, 1-3 Sätze)`);
 
   const roleEigenschaften: Record<string, string> = {
-    'CEM (Customer Experience Manager)': `Branchenwissen: Customer Experience, Customer Service, Marketing / Customer Relations
+    'CEM (Customer Experience Manager)': `Jobbeschreibung: Verantwortet die End-to-End-Customer-Journey und sorgt für konsistente, positive Kundenerlebnisse über alle Touchpoints. Analysiert Feedback, NPS und Verhaltensdaten, um Reibungspunkte zu reduzieren und Kundenbindung zu stärken. Arbeitet eng mit Marketing, Vertrieb und Service zusammen, um Prozesse kundenzentriert zu gestalten.
+Branchenwissen: Customer Experience, Customer Service, Marketing / Customer Relations
 Tools & Technologien: Microsoft Office / Shopify, Microsoft PowerPoint / Marketing Automation (HubSpot/Klaviyo), Microsoft Excel / Google Ads / Google Marketing Suite
 Soziale Kompetenz: Teamwork / Structured working style, Leadership / Teamwork / Collaboration, Customer Service / Organizational skills
 Weitere Kenntnisse: Project Management / Customer Journey / UX, Event Management / Campaign Management, Analytical Skills / Präsentationsskills`,
 
-    'SMM (Social Media Manager)': `Branchenwissen: Digital Marketing, Marketing, E-Commerce
+    'SMM (Social Media Manager)': `Jobbeschreibung: Plant, erstellt und veröffentlicht Inhalte auf Social-Media-Kanälen und steuert das Community-Management. Beobachtet Trends, KPIs und Reichweiten, um Content-Strategien laufend zu optimieren. Setzt Paid- und Organic-Kampagnen zur Markenstärkung und Lead-Generierung um.
+Branchenwissen: Digital Marketing, Marketing, E-Commerce
 Tools & Technologien: Microsoft Office / Analytics & BI (Tableau/Looker/Power BI), Google Analytics / CMS (WordPress/Typo3/other), Microsoft Excel / Google Ads / Google Marketing Suite
 Soziale Kompetenz: Teamwork / Teamwork / Collaboration, Communication / Analytical thinking, Project Management / Proactive / autonomous working style
 Weitere Kenntnisse: Project Management / Campaign Management, Online Marketing / KPI / Analytics & Reporting, Social Media / Performance Marketing`,
 
-    'DMM (Digital Manager)': `Branchenwissen: Social Media Marketing / Content Creation, Digital Marketing / Kommunikation, Social Media / Partnerschaften
+    'DMM (Digital Manager)': `Jobbeschreibung: Steuert digitale Kanäle und Massnahmen, um Marken sichtbar zu machen und die Online-Performance zu steigern. Verantwortet Strategie und Umsetzung von SEO, SEA, E-Mail, Display und Social Ads. Analysiert Performance-Daten und optimiert Budgets entlang des Funnels.
+Branchenwissen: Social Media Marketing / Content Creation, Digital Marketing / Kommunikation, Social Media / Partnerschaften
 Tools & Technologien: Microsoft Office / Adobe Creative Suite, Microsoft PowerPoint / Social Media Platforms (FB/TikTok/IG), Microsoft Word / CMS / Typo3
 Soziale Kompetenz: Teamwork / Teamwork / Collaboration, Leadership / Structured working style, Communication / Proactive / autonomous
 Weitere Kenntnisse: Social Media / Social Media Strategy, Sales / Content Strategy & Planning, Project Management / Video & Photo Production`,
 
-    'Growth Manager': `Branchenwissen: Digital Marketing / Website Development, SEO / Digital Marketing, Web Design / Website security
+    'Growth Manager': `Jobbeschreibung: Treibt skalierbares Nutzer- und Umsatzwachstum durch experimentelle Massnahmen entlang des gesamten Funnels. Nutzt Daten, Hypothesen und schnelle Tests, um Akquise, Aktivierung und Retention zu verbessern. Arbeitet eng mit Produkt, Marketing und Engineering zusammen.
+Branchenwissen: Digital Marketing / Website Development, SEO / Digital Marketing, Web Design / Website security
 Tools & Technologien: WordPress / CMS (WordPress/Typo3/other), HTML / HTML / CSS, Google Analytics / Dev tools (Git/Docker/CI/CD)
 Soziale Kompetenz: Teamwork / Teamwork / Collaboration, Communication / Technical leadership, Project Management / Cross-functional collaboration
 Weitere Kenntnisse: Social Media / Technical Architecture / DevOps, SEO / Website Operations / Content Publishing, Marketing Strategy / Customer Journey / UX`,
 
-    'Kommunikation Manager': `Branchenwissen: Event Management / Kommunikation, Digital Marketing / Strategische Kommunikationsplanung, Corporate Communications / Stakeholderkommunikation
+    'Kommunikation Manager': `Jobbeschreibung: Verantwortet die interne und externe Kommunikation und sichert eine konsistente Markenstimme. Plant Pressemitteilungen, Statements, Krisenkommunikation und Stakeholder-Dialoge. Schreibt Inhalte, briefed Agenturen und steuert den Content-Kalender.
+Branchenwissen: Event Management / Kommunikation, Digital Marketing / Strategische Kommunikationsplanung, Corporate Communications / Stakeholderkommunikation
 Tools & Technologien: Microsoft Office / MS 365 / Content Management Systems, Adobe InDesign / Social Media / Monitoring tools, Adobe Photoshop / Digitale Kanäle / Content Formate
 Soziale Kompetenz: Teamwork / Communication, Social Media / Teamwork / Collaboration, Communication / Strategic thinking
 Weitere Kenntnisse: Project Management / Strategic Communications, Marketing Strategy / Project Management, SEO / Leadership`,
 
-    'Webseiten Manager': `Branchenwissen: Marketing / Digital Media and publishing, Customer Service / Fintec, Blockchain, stablecoin, FMCG / AI Governance and Compliance
+    'Webseiten Manager': `Jobbeschreibung: Verantwortet Konzeption, Pflege und Weiterentwicklung der Unternehmenswebsite. Überwacht Performance, SEO, UX und Conversion und steuert Anpassungen mit Entwicklung und Design. Sorgt für rechtssichere, barrierearme Inhalte und einen reibungslosen technischen Betrieb.
+Branchenwissen: Marketing / Digital Media and publishing, Customer Service / Fintec, Blockchain, stablecoin, FMCG / AI Governance and Compliance
 Tools & Technologien: Microsoft Office / Google Analytics / GA4, Microsoft Excel / Meta Ads / Google Ads, Microsoft PowerPoint / Marketing Automation platforms
 Soziale Kompetenz: Leadership / Data-driven mindset, Teamwork / Strategic thinking, Communication / Cross-functional collaboration
 Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Marketing Strategy / Campaign Management, Campaign Management / Performance Marketing`
