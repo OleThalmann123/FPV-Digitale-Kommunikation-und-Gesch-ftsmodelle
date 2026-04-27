@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-// Generiert personas_48.xlsx mit allen 48 Persona-Kombinationen,
+// Generiert personas_24.xlsx mit allen 24 Persona-Kombinationen,
 // passend zu generateCombinations() in src/app/page.tsx.
 // Aufruf: node scripts/generate_personas_excel.js
 
@@ -18,27 +18,24 @@ const ROLES = [
 
 const GESCHLECHTER = ['Männlich', 'Weiblich'];
 const HAUSHALTE = ['1 Person kein Kind', '2 Personen 1 Kind'];
-const PLZ_VARIANTEN = ['9000', '9403'];
 
 const rows = [];
 let id = 1;
 for (const r of ROLES) {
   for (const g of GESCHLECHTER) {
     for (const h of HAUSHALTE) {
-      for (const plz of PLZ_VARIANTEN) {
-        rows.push({
-          ID: id++,
-          Rolle: r.rolle,
-          Geschlecht: g,
-          Alter: '20-29 Jahre',
-          Nationalitaet: 'Schweiz',
-          Haushalt: h,
-          Ausbildung: 'Bachelor',
-          Berufserfahrung: r.erfahrung,
-          Wohnsitzland: 'Schweiz',
-          Postleitzahl: plz,
-        });
-      }
+      rows.push({
+        ID: id++,
+        Rolle: r.rolle,
+        Geschlecht: g,
+        Alter: '20-29 Jahre',
+        Nationalitaet: 'Schweiz',
+        Haushalt: h,
+        Ausbildung: 'Bachelor',
+        Berufserfahrung: r.erfahrung,
+        Wohnsitzland: 'Schweiz',
+        Postleitzahl: '9000',
+      });
     }
   }
 }
@@ -59,8 +56,8 @@ ws['!cols'] = [
   { wch: 11 },  // Postleitzahl
 ];
 
-XLSX.utils.book_append_sheet(wb, ws, 'Personas_48');
+XLSX.utils.book_append_sheet(wb, ws, 'Personas_24');
 
-const outPath = path.join(__dirname, '..', 'personas_48.xlsx');
+const outPath = path.join(__dirname, '..', 'personas_24.xlsx');
 XLSX.writeFile(wb, outPath);
 console.log(`Excel generiert: ${outPath} (${rows.length} Zeilen)`);

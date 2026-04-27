@@ -260,12 +260,12 @@ Soziale Kompetenz: Leadership / Data-driven mindset, Teamwork / Strategic thinki
 Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Marketing Strategy / Campaign Management, Campaign Management / Performance Marketing`
   };
 
-  // Persona-Splitter: 6 Rollen x 2 Geschlechter x 1 Alter-Range x 1 Erfahrungs-Range
-  // x 1 Ausbildung (Bachelor) x 2 Haushalt x 2 PLZ = 48 Personas pro Modell.
+  // Persona-Splitter so eingestellt, dass die LLMs ebenfalls genau 24 Personas produzieren --
+  // gleich viele wie der Demoscope-Datensatz. Aufteilung: 6 Rollen x 2 Geschlechter
+  // x 1 Alter-Range x 1 Erfahrungs-Range x 1 Ausbildung (Bachelor) x 2 Haushalt x 1 PLZ = 24.
   // Alter & Erfahrung als zusammenhängende Range-Strings -> bei T=0.7 wählt das Modell intern
   // pro Run einen plausiblen Wert, das gibt zusätzliche Varianz ohne die Combos zu erhöhen.
   // Haushalt-Splitter (Single vs. Familie) macht Familien-Bias bei H5 (Saturday/Zeit) sichtbar.
-  // PLZ-Splitter (9000 St. Gallen / 9403 Goldach) liefert mildes urban/rural-Signal.
   // Erfahrungs-Range pro Rolle aus manueller Recherche (Ole, Screenshot 27.04.2026), Alter
   // einheitlich 20-29 Jahre für die ganze Studie.
   const roleWorkExperience: Record<string, string> = {
@@ -286,14 +286,14 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       Ausbildung: 'Bachelor',
       Berufserfahrung: roleWorkExperience[role] || '3-5 Jahre',
       Wohnsitzland: 'Schweiz',
-      Postleitzahl: '9000, 9403',
+      Postleitzahl: '9000',
       Avatar_Eigenschaften_und_Praeferenzen: roleEigenschaften[role] || ''
     };
     return acc;
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v26', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v27', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
