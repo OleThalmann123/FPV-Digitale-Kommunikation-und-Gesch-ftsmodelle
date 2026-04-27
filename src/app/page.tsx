@@ -261,16 +261,19 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   };
 
   // Persona-Splitter so eingestellt, dass die LLMs ebenfalls genau 24 Personas produzieren -- gleich
-  // viele wie der Demoscope-Datensatz. Aufteilung: 6 Rollen x 2 Geschlechter x 2 Alterswerte
-  // (min/max der Range) x 1 Erfahrung-Range x 1 Ausbildung = 24.
+  // viele wie der Demoscope-Datensatz. Aufteilung: 6 Rollen x 2 Geschlechter x 1 Alter-Range
+  // x 1 Erfahrungs-Range x 1 Ausbildung x 2 Haushalt = 24.
+  // Alter & Erfahrung als zusammenhängende Range-Strings -> bei T=0.7 wählt das Modell intern
+  // pro Run einen plausiblen Wert, das gibt zusätzliche Varianz ohne Combos zu erhöhen.
+  // Haushalt ist die zweite Splitter-Dimension, um den Familien-Bias bei H5 (Saturday/Zeit) sichtbar zu machen.
   // Werte aus manueller Recherche (Ole, Screenshot 27.04.2026).
   const roleAgeRanges: Record<string, string> = {
-    'CEM (Customer Experience Manager)': '23, 26',           // 23-26 Jahre
-    'SMM (Social Media Manager)': '25, 31',                  // 25-31 Jahre
-    'DMM (Digital Manager)': '22, 28',                       // 22-28 Jahre
-    'Growth Manager': '26, 30',                              // 26-30 Jahre
-    'Kommunikation Manager': '22, 25',                       // 22-25 Jahre
-    'Webseiten Manager': '24, 28'                            // 24-28 Jahre
+    'CEM (Customer Experience Manager)': '23-26 Jahre',
+    'SMM (Social Media Manager)': '25-31 Jahre',
+    'DMM (Digital Manager)': '22-28 Jahre',
+    'Growth Manager': '26-30 Jahre',
+    'Kommunikation Manager': '22-25 Jahre',
+    'Webseiten Manager': '24-28 Jahre'
   };
 
   const roleWorkExperience: Record<string, string> = {
@@ -285,9 +288,9 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
     acc[role] = {
       Geschlecht: 'Männlich, Weiblich',
-      Alter: roleAgeRanges[role] || '25, 30',
+      Alter: roleAgeRanges[role] || '25-30 Jahre',
       Nationalitaet: 'Schweiz',
-      Haushalt: '2 Personen 1 Kind',
+      Haushalt: '1 Person kein Kind, 2 Personen 1 Kind',
       Ausbildung: 'Bachelor / Master',
       Berufserfahrung: roleWorkExperience[role] || '3-5 Jahre',
       Wohnsitzland: 'Schweiz',
@@ -298,7 +301,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v21', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v22', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
