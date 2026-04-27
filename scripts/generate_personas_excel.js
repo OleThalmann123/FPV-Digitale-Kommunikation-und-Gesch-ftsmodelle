@@ -44,9 +44,9 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
 // Berufserfahrung 1:1 aus src/app/page.tsx (roleWorkExperience).
 const roleWorkExperience = {
   'CEM (Customer Experience Manager)': '5-7 Jahre',
-  'SMM (Social Media Manager)': '2-5 Jahre',
-  'DMM (Digital Manager)': '2-4 Jahre',
-  'Growth Manager': '2-4 Jahre',
+  'SMM (Social Media Manager)': '3-5 Jahre',
+  'DMM (Digital Manager)': '3-4 Jahre',
+  'Growth Manager': '3-4 Jahre',
   'Kommunikation Manager': '4-6 Jahre',
   'Webseiten Manager': '5-7 Jahre',
 };
@@ -109,7 +109,7 @@ for (const role of ROLES) {
         ID: id++,
         Rolle: role,
         Geschlecht: g,
-        Alter: '20-29 Jahre',
+        Alter: '30-39 Jahre',
         Nationalitaet: 'Schweiz',
         Haushalt: h,
         Ausbildung: 'Bachelor',

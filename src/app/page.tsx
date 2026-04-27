@@ -267,12 +267,12 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   // pro Run einen plausiblen Wert, das gibt zusätzliche Varianz ohne die Combos zu erhöhen.
   // Haushalt-Splitter (Single vs. Familie) macht Familien-Bias bei H5 (Saturday/Zeit) sichtbar.
   // Erfahrungs-Range pro Rolle aus manueller Recherche (Ole, Screenshot 27.04.2026), Alter
-  // einheitlich 20-29 Jahre für die ganze Studie.
+  // einheitlich 30-39 Jahre für die ganze Studie.
   const roleWorkExperience: Record<string, string> = {
     'CEM (Customer Experience Manager)': '5-7 Jahre',
-    'SMM (Social Media Manager)': '2-5 Jahre',
-    'DMM (Digital Manager)': '2-4 Jahre',
-    'Growth Manager': '2-4 Jahre',
+    'SMM (Social Media Manager)': '3-5 Jahre',
+    'DMM (Digital Manager)': '3-4 Jahre',
+    'Growth Manager': '3-4 Jahre',
     'Kommunikation Manager': '4-6 Jahre',
     'Webseiten Manager': '5-7 Jahre'
   };
@@ -280,7 +280,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
     acc[role] = {
       Geschlecht: 'Männlich, Weiblich',
-      Alter: '20-29 Jahre',
+      Alter: '30-39 Jahre',
       Nationalitaet: 'Schweiz',
       Haushalt: '1 Person kein Kind, 2 Personen 1 Kind',
       Ausbildung: 'Bachelor',
