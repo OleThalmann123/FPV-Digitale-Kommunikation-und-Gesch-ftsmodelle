@@ -260,18 +260,17 @@ Soziale Kompetenz: Leadership / Data-driven mindset, Teamwork / Strategic thinki
 Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Marketing Strategy / Campaign Management, Campaign Management / Performance Marketing`
   };
 
-  // Alters- und Berufserfahrungs-Ranges pro Rolle. Quelle: manuelle Recherche (Ole, Screenshot 27.04.2026).
-  // Werte werden als zusammenhängender Range-String (z. B. "23-26") in den Persona-Prompt injiziert,
-  // sodass das LLM bei T=0.7 selbst einen plausiblen Wert innerhalb des Ranges für die Persona wählt.
-  // Damit kein Komma -> generateCombinations() erzeugt nur 1 Variante pro Range, Kombinatorik bleibt
-  // bei 1 (Alter) x 1 (WorkExp) x 2 (Gender) x 2 (Education) = 4 Personas pro Rolle = 24 total.
+  // Persona-Splitter so eingestellt, dass die LLMs ebenfalls genau 24 Personas produzieren -- gleich
+  // viele wie der Demoscope-Datensatz. Aufteilung: 6 Rollen x 2 Geschlechter x 2 Alterswerte
+  // (min/max der Range) x 1 Erfahrung-Range x 1 Ausbildung = 24.
+  // Werte aus manueller Recherche (Ole, Screenshot 27.04.2026).
   const roleAgeRanges: Record<string, string> = {
-    'CEM (Customer Experience Manager)': '23-26 Jahre',
-    'SMM (Social Media Manager)': '25-31 Jahre',
-    'DMM (Digital Manager)': '22-28 Jahre',
-    'Growth Manager': '26-30 Jahre',
-    'Kommunikation Manager': '22-25 Jahre',
-    'Webseiten Manager': '24-28 Jahre'
+    'CEM (Customer Experience Manager)': '23, 26',           // 23-26 Jahre
+    'SMM (Social Media Manager)': '25, 31',                  // 25-31 Jahre
+    'DMM (Digital Manager)': '22, 28',                       // 22-28 Jahre
+    'Growth Manager': '26, 30',                              // 26-30 Jahre
+    'Kommunikation Manager': '22, 25',                       // 22-25 Jahre
+    'Webseiten Manager': '24, 28'                            // 24-28 Jahre
   };
 
   const roleWorkExperience: Record<string, string> = {
@@ -286,10 +285,10 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   const defaultRoleVars = AVAILABLE_ROLES.reduce((acc, role) => {
     acc[role] = {
       Geschlecht: 'Männlich, Weiblich',
-      Alter: roleAgeRanges[role] || '25-30 Jahre',
+      Alter: roleAgeRanges[role] || '25, 30',
       Nationalitaet: 'Schweiz',
       Haushalt: '2 Personen 1 Kind',
-      Ausbildung: 'Master, Bachelor',
+      Ausbildung: 'Bachelor / Master',
       Berufserfahrung: roleWorkExperience[role] || '3-5 Jahre',
       Wohnsitzland: 'Schweiz',
       Postleitzahl: '9000',
@@ -299,252 +298,139 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v20', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v21', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
   const [historicRuns, setHistoricRuns] = useState<any[]>([]);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
 
-  type OfflineBatchItem = {
+  // Demoscope-Upload: Eine einzige Quelle, eine Stapel-Extraktion. Alle Personas landen automatisch
+  // als virtuelles Modell `Demoscope` im combinedResults-Stream und damit in Dashboard/Excel/Aggregat.
+  type DemoscopePersona = {
     id: string;
     images: string[];
-    status: 'idle' | 'loading' | 'success' | 'error';
-    result?: string;
+    combo: Record<string, string>;
+    response: string;
+    status: 'pending' | 'loading' | 'success' | 'error';
+    error?: string;
   };
 
-  type OfflineBatch = {
-    id: string;
-    modelName: string;
-    targetRunIds: number[];
-    items: OfflineBatchItem[];
+  type DemoscopeUpload = {
+    images: string[];           // alle hochgeladenen Screenshots in Reihenfolge
+    pagesPerPersona: number;    // wie viele Screenshots gehören zu EINER Persona
+    modelName: string;          // erscheint als modelId im Dashboard
+    status: 'idle' | 'extracting' | 'done';
+    results: DemoscopePersona[];
   };
 
-  const [offlineBatches, setOfflineBatches] = useLocalStorage<OfflineBatch[]>('pp_offline_batches_v1', []);
-  const [selectedRunsForSync, setSelectedRunsForSync] = useState<Record<string, string>>({});
+  const [demoscope, setDemoscope] = useLocalStorage<DemoscopeUpload>('pp_demoscope_v1', {
+    images: [],
+    pagesPerPersona: 1,
+    modelName: 'Demoscope',
+    status: 'idle',
+    results: []
+  });
   const [includeOfflineData, setIncludeOfflineData] = useLocalStorage('pp_include_offline_data', true);
 
-  const handleAddBatch = () => {
-    setOfflineBatches(prev => [...prev, { id: Date.now().toString(), modelName: 'Demoscope', targetRunIds: [], items: [] }]);
+  // ==================== Demoscope-Upload: smartes Stapel-Extraktion ====================
+
+  const fileListToBase64 = async (files: File[]): Promise<string[]> => {
+    return Promise.all(files.map(file => new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (event) => resolve(event.target?.result as string);
+      reader.readAsDataURL(file);
+    })));
   };
 
-  const handleRemoveBatch = (id: string) => {
-    setOfflineBatches(prev => prev.filter(b => b.id !== id));
-  };
-
-  const handleSyncBatchToRun = async (batchId: string, runId: number) => {
-    const batch = offlineBatches.find(b => b.id === batchId);
-    if (!batch) return;
-
-    await supabase.from('prompt_run_results').delete().eq('run_id', runId).eq('model_id', batch.modelName || 'Manuelles Modell');
-
-    const successfulItems = batch.items.filter(i => i.status === 'success' && i.result);
-    for (const item of successfulItems) {
-      let extractedData: any;
-      try {
-        let jsonString = item.result!;
-        const match = item.result!.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (match) jsonString = match[1];
-        extractedData = JSON.parse(jsonString);
-      } catch (e) { continue; }
-
-      const combo: Record<string, string> = {
-        Rolle: extractedData.profil?.Rolle || 'Unbekannt',
-      };
-      variables.forEach(v => {
-        if (v !== 'Rolle') combo[v] = extractedData.profil?.[v] || '';
-      });
-
-      const newResult = {
-        run_id: runId,
-        model_id: batch.modelName || 'Manuelles Modell',
-        combo: combo,
-        prompt_sent: 'Manuell extrahiert aus Screenshots',
-        response: JSON.stringify(extractedData),
-        status: 'success'
-      };
-
-      await supabase.from('prompt_run_results').insert(newResult).then(({ error }) => { if (error) console.error("Error saving manual result to run " + runId, error); });
-    }
-
-    setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
-      ...b,
-      targetRunIds: Array.from(new Set([...(b.targetRunIds || []), runId]))
-    } : b));
-
-    alert(`Extrahierten Datensatz in Tresor-Lauf gespeichert!`);
-
-    if (activeRunId === runId) {
-      loadHistoricRun(runId);
-    }
-  };
-
-  const handleRemoveBatchFromRun = async (batchId: string, runId: number) => {
-    const batch = offlineBatches.find(b => b.id === batchId);
-    if (!batch) return;
-
-    await supabase.from('prompt_run_results').delete().eq('run_id', runId).eq('model_id', batch.modelName || 'Manuelles Modell');
-    setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
-      ...b,
-      targetRunIds: (b.targetRunIds || []).filter(id => id !== runId)
-    } : b));
-
-    alert(`Datensatz aus Tresor-Lauf entfernt!`);
-
-    if (activeRunId === runId) {
-      loadHistoricRun(runId);
-    }
-  };
-
-  const handleAddBatchItem = (batchId: string) => {
-    setOfflineBatches(prev => prev.map(b => b.id === batchId ? { ...b, items: [...b.items, { id: Date.now().toString() + Math.random(), images: [], status: 'idle' }] } : b));
-  };
-
-  const handleRemoveBatchItem = (batchId: string, itemId: string) => {
-    setOfflineBatches(prev => prev.map(b => b.id === batchId ? { ...b, items: b.items.filter(i => i.id !== itemId) } : b));
-  };
-
-  const handleImageUpload = async (batchId: string, itemId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDemoscopeAddImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+    // Sortiere nach Dateiname, damit die User-Reihenfolge auch bei Multi-Select stimmt.
+    files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const newImages = await fileListToBase64(files);
+    setDemoscope(prev => ({ ...prev, images: [...prev.images, ...newImages], status: 'idle', results: [] }));
+  };
 
-    const base64Promises = files.map(file => {
-      return new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          resolve(event.target?.result as string);
-        };
-        reader.readAsDataURL(file);
-      });
+  const handleDemoscopeRemoveImage = (index: number) => {
+    setDemoscope(prev => ({ ...prev, images: prev.images.filter((_, i) => i !== index), status: 'idle', results: [] }));
+  };
+
+  const handleDemoscopeReset = () => {
+    setDemoscope({ images: [], pagesPerPersona: 1, modelName: 'Demoscope', status: 'idle', results: [] });
+  };
+
+  const handleDemoscopePagesChange = (n: number) => {
+    setDemoscope(prev => ({ ...prev, pagesPerPersona: Math.max(1, n), status: 'idle', results: [] }));
+  };
+
+  const handleDemoscopeModelNameChange = (name: string) => {
+    setDemoscope(prev => ({ ...prev, modelName: name }));
+  };
+
+  // Liest die rohe Vision-Antwort und baut combo + canonical response auf.
+  const parseDemoscopeExtraction = (raw: string): { combo: Record<string, string>, response: string } => {
+    let extractedData: any = {};
+    try {
+      let jsonString = raw;
+      const match = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (match) jsonString = match[1];
+      extractedData = JSON.parse(jsonString);
+    } catch (e) {
+      // raw bleibt als Response erhalten -- parseAnswers fängt das später per Regex auf
+    }
+    const combo: Record<string, string> = {
+      Rolle: extractedData.profil?.Rolle || 'Unbekannt',
+    };
+    variables.forEach(v => {
+      if (v !== 'Rolle') combo[v] = extractedData.profil?.[v] || '';
     });
-
-    const base64Images = await Promise.all(base64Promises);
-
-    setOfflineBatches(prev => prev.map(b => {
-      if (b.id === batchId) {
-        return {
-          ...b,
-          items: b.items.map(i => i.id === itemId ? { ...i, images: [...i.images, ...base64Images] } : i)
-        };
-      }
-      return b;
-    }));
+    return { combo, response: raw };
   };
 
-
-
-  const removeImageFromItem = (batchId: string, itemId: string, imageIndex: number) => {
-    setOfflineBatches(prev => prev.map(b => {
-      if (b.id === batchId) {
-        return {
-          ...b,
-          items: b.items.map(i => i.id === itemId ? { ...i, images: i.images.filter((_, idx) => idx !== imageIndex) } : i)
-        };
-      }
-      return b;
-    }));
-  };
-
-  const handleExtractBatchItem = async (batchId: string, itemId: string) => {
+  const runDemoscopeExtraction = async () => {
     if (!apiKey) {
-      alert('Bitte API Key (OpenRouter) in den Settings eintragen, um die Vision API (z.B. GPT-4o) zu nutzen.');
+      alert('Bitte API Key (OpenRouter) in den Settings eintragen, um die Vision API (GPT-4o) zu nutzen.');
       return;
     }
-    const batch = offlineBatches.find(b => b.id === batchId);
-    if (!batch) return;
-    const item = batch.items.find(i => i.id === itemId);
-    if (!item || item.images.length === 0) return;
+    if (demoscope.images.length === 0) return;
 
-    setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
-      ...b, items: b.items.map(i => i.id === itemId ? { ...i, status: 'loading' } : i)
-    } : b));
-
-    try {
-      const res = await extractFromImages(item.images, apiKey, fragebogen);
-      setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
-        ...b, items: b.items.map(i => i.id === itemId ? { ...i, status: 'success', result: res } : i)
-      } : b));
-
-      let extractedData: any;
-      try {
-        let jsonString = res;
-        const match = res.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (match) jsonString = match[1];
-        extractedData = JSON.parse(jsonString);
-      } catch (e) {
-        throw new Error("Konnte Antwort nicht als JSON parsen: " + res);
-      }
-
-      const combo: Record<string, string> = {
-        Rolle: extractedData.profil?.Rolle || 'Unbekannt',
-        ...extractedData.profil
-      };
-      // fallback in case variables state had some other names missing
-      variables.forEach(v => {
-        if (v !== 'Rolle' && !combo[v]) combo[v] = extractedData.profil?.[v] || '';
-      });
-
-      let mockResponse = JSON.stringify(extractedData);
-
-      const newResult = {
-        id: `manuell-${Date.now()}-${Math.random()}`,
-        promptSent: 'Manuell extrahiert aus Screenshots',
-        response: mockResponse,
-        status: 'success' as const,
-        combo: combo,
-        modelId: batch.modelName || 'Manuelles Modell',
-        modelConfig: { type: 'openrouter', modelId: batch.modelName || 'openai/gpt-4o' }
-      };
-
-    } catch (err: any) {
-      setOfflineBatches(prev => prev.map(b => b.id === batchId ? {
-        ...b, items: b.items.map(i => i.id === itemId ? { ...i, status: 'error', result: err.message } : i)
-      } : b));
+    const pp = Math.max(1, demoscope.pagesPerPersona);
+    const chunks: string[][] = [];
+    for (let i = 0; i < demoscope.images.length; i += pp) {
+      chunks.push(demoscope.images.slice(i, i + pp));
     }
-  };
+    const ts = Date.now();
+    const initialResults: DemoscopePersona[] = chunks.map((imgs, i) => ({
+      id: `offline-demoscope-${ts}-${i}`,
+      images: imgs,
+      combo: { Rolle: 'Erkenne...' },
+      response: '',
+      status: 'pending'
+    }));
+    setDemoscope(prev => ({ ...prev, status: 'extracting', results: initialResults }));
 
-  const getOfflineTableData = (batchId: string) => {
-    const batch = offlineBatches.find(b => b.id === batchId);
-    if (!batch) return { rows: [], columns: [] };
-
-    const rows: any[] = [];
-    const allFragen = new Set<string>();
-
-    batch.items.filter(i => i.status === 'success' && i.result).forEach(item => {
+    // Sequenziell, um die Vision-API nicht zu überlasten und Kosten zu kontrollieren.
+    for (let i = 0; i < chunks.length; i++) {
+      setDemoscope(prev => ({
+        ...prev,
+        results: prev.results.map((r, idx) => idx === i ? { ...r, status: 'loading' } : r)
+      }));
       try {
-        let match = item.result!.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        let jsonStr = match ? match[1] : item.result!;
-        const parsed = JSON.parse(jsonStr);
-        let comboInfo = "Unbekannt";
-        
-        if (parsed.profil) {
-          comboInfo = parsed.profil.Rolle || Object.values(parsed.profil).filter(Boolean).join(', ');
-        }
-
-        const ans = parsed.antworten || parseAnswers(item.result!);
-
-        const rowData: any = { Rolle: comboInfo };
-        Object.entries(ans).forEach(([frage, score]) => {
-          allFragen.add(frage);
-          rowData[frage] = score;
-        });
-        rows.push(rowData);
-      } catch (e) {
-        // Fallback robust parsing if JSON is broken completely
-        try {
-          const scores = parseAnswers(item.result!);
-          const rowData: any = { Rolle: "Unbekannt" };
-          Object.entries(scores).forEach(([frage, score]) => {
-            allFragen.add(frage);
-            rowData[frage] = score;
-          });
-          rows.push(rowData);
-        } catch(e2) {}
+        const raw = await extractFromImages(chunks[i], apiKey, fragebogen);
+        const { combo, response } = parseDemoscopeExtraction(raw);
+        setDemoscope(prev => ({
+          ...prev,
+          results: prev.results.map((r, idx) => idx === i ? { ...r, status: 'success', combo, response } : r)
+        }));
+      } catch (err: any) {
+        setDemoscope(prev => ({
+          ...prev,
+          results: prev.results.map((r, idx) => idx === i ? { ...r, status: 'error', error: err?.message || 'Vision API Fehler' } : r)
+        }));
       }
-    });
-
-    const columns = Array.from(allFragen).sort((a, b) => parseInt(a.replace(/\D/g, '') || '0') - parseInt(b.replace(/\D/g, '') || '0'));
-    return { rows, columns };
+    }
+    setDemoscope(prev => ({ ...prev, status: 'done' }));
   };
 
 
@@ -812,29 +698,20 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   const currentModelsCount = getModelsToRun().length;
   const comboCount = generateCombinations().length;
 
-  const offlineResults: any[] = offlineBatches.flatMap(batch => 
-    (batch.items || []).filter(i => i.status === 'success' && i.result).map(item => {
-      let combo: Record<string, string> = { Rolle: 'Unbekannt' };
-      try {
-        let match = item.result!.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        let jsonStr = match ? match[1] : item.result!;
-        const parsed = JSON.parse(jsonStr);
-        if (parsed.profil) {
-          combo = { ...parsed.profil, Rolle: parsed.profil.Rolle || 'Unbekannt' };
-        }
-      } catch (e) {}
-      
-      return {
-        id: `offline-${batch.id}-${item.id}`,
-        promptSent: 'Offline Upload: ' + (batch.modelName || 'Datensatz'),
-        response: item.result,
-        status: 'success' as const,
-        combo: combo,
-        modelId: batch.modelName || 'Manuelles Modell',
-        modelConfig: { type: 'openrouter', modelId: 'offline' }
-      };
-    })
-  );
+  // Demoscope-Extraktionen werden hier zu virtuellen Run-Ergebnissen mit modelId = demoscope.modelName.
+  // Damit landen sie automatisch in combinedResults und damit in Dashboard, Aggregat, Excel-Sheets,
+  // Erfolgsquoten-Karte etc. -- gleiche Auswertung wie Apertus / gpt-4o-mini.
+  const offlineResults: any[] = (demoscope.results || [])
+    .filter(r => r.status === 'success' || r.status === 'error')
+    .map(r => ({
+      id: r.id,
+      promptSent: `Demoscope-Upload (Vision OCR, ${r.images.length} Screenshot${r.images.length === 1 ? '' : 's'})`,
+      response: r.status === 'success' ? r.response : (r.error || 'Vision-Extraktion fehlgeschlagen'),
+      status: r.status,
+      combo: r.combo,
+      modelId: demoscope.modelName || 'Demoscope',
+      modelConfig: { type: 'openrouter' as const, modelId: 'openai/gpt-4o' }
+    }));
 
   const combinedResults = includeOfflineData ? [...results, ...offlineResults] : [...results];
 
@@ -1176,7 +1053,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
             className="justify-start gap-3 w-full"
             onClick={() => setActiveTab('manual')}
           >
-            <Database className="w-4 h-4" /> Offline Datensatz
+            <Database className="w-4 h-4" /> Demoscope Upload
           </Button>
           <Button
             variant={activeTab === 'dashboard' ? 'secondary' : 'ghost'}
@@ -1659,191 +1536,171 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-16">
               <div className="flex items-center justify-between pb-4">
                 <div>
-                  <h2 className="text-3xl font-bold tracking-tight">Offline Datensatz</h2>
-                  <p className="text-muted-foreground">Lade Screenshots reeller Umfragen oder Testdaten hoch (z.B. Demoscope). Ein GPT-4 Vision Modell extrahiert die Profil-Variablen und Antworten und verknüpft sie optional mit deinen Läufen.</p>
+                  <h2 className="text-3xl font-bold tracking-tight">Demoscope-Datensatz</h2>
+                  <p className="text-muted-foreground max-w-3xl">
+                    Lade alle Screenshots auf einmal hoch. Die Vision-API erkennt die Rolle automatisch, extrahiert das Profil und alle Antworten und legt jede Persona als virtuelles Modell <span className="font-mono">{demoscope.modelName}</span> in deine Auswertung — gleiche Logik wie Apertus / gpt-4o-mini.
+                  </p>
                 </div>
-                <Button onClick={handleAddBatch} className="gap-2"><Plus className="w-4 h-4" /> Neuen Datensatz hinzufügen</Button>
               </div>
 
-              {offlineBatches.length === 0 ? (
-                <div className="text-center p-12 text-muted-foreground border border-dashed rounded-lg bg-muted/20">
-                  Keine Datensätze vorhanden. Klicke auf &quot;Neuen Datensatz hinzufügen&quot;, um Screenshots hochzuladen.
-                </div>
-              ) : (
-                <div className="space-y-12">
-                  {offlineBatches.map((batch, idx) => {
-                    const tableData = getOfflineTableData(batch.id);
-                    return (
-                      <Card key={batch.id} className="border-primary/20 shadow-sm relative pt-4 overflow-hidden">
-                        <Button variant="ghost" size="icon" className="absolute right-4 top-4 text-destructive hover:bg-destructive/10 z-10" onClick={() => handleRemoveBatch(batch.id)}><Trash2 className="w-4 h-4" /></Button>
+              {(() => {
+                const pp = Math.max(1, demoscope.pagesPerPersona);
+                const expectedPersonas = Math.ceil(demoscope.images.length / pp);
+                const hasImages = demoscope.images.length > 0;
+                const isExtracting = demoscope.status === 'extracting';
+                const successN = demoscope.results.filter(r => r.status === 'success').length;
+                const errorN = demoscope.results.filter(r => r.status === 'error').length;
+                const loadingN = demoscope.results.filter(r => r.status === 'loading').length;
+                const pendingN = demoscope.results.filter(r => r.status === 'pending').length;
+                const totalProgress = successN + errorN;
+                const totalToProcess = demoscope.results.length;
 
-                        <div className="px-6 pb-2 grid grid-cols-1 md:grid-cols-2 gap-6 relative z-0">
-                          <div className="space-y-3">
-                            <Label className="text-base font-semibold">Name / Quelle des Datensatzes</Label>
-                            <Input
-                              value={batch.modelName}
-                              onChange={(e) => setOfflineBatches(prev => prev.map(b => b.id === batch.id ? { ...b, modelName: e.target.value } : b))}
-                              placeholder="z.B. Demoscope"
-                              className="bg-muted/30 font-medium text-lg h-12"
-                            />
-                          </div>
-                          <div className="space-y-3">
-                            {/* Run management moved to bottom */}
-                          </div>
+                return (
+                  <Card className="border-primary/20 shadow-sm">
+                    <CardHeader className="border-b bg-muted/5">
+                      <CardTitle className="text-xl flex items-center gap-2"><Database className="w-5 h-5" /> Upload &amp; Stapel-Auswertung</CardTitle>
+                      <CardDescription>
+                        Drag &amp; Drop oder klicke aufs Upload-Feld. Mehrfach-Selektion erlaubt. Reihenfolge wird automatisch nach Dateiname sortiert (z. B. <span className="font-mono">persona-01-page-1.png</span>).
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="pt-6 space-y-6">
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <div className="space-y-2">
+                          <Label className="text-sm font-semibold">Name (modelId im Dashboard)</Label>
+                          <Input
+                            value={demoscope.modelName}
+                            onChange={(e) => handleDemoscopeModelNameChange(e.target.value)}
+                            placeholder="Demoscope"
+                            disabled={isExtracting}
+                          />
                         </div>
-
-                        <div className="px-6 py-4 border-t bg-muted/5 flex items-center justify-between">
-                          <div>
-                            <h3 className="font-semibold text-lg">Zugehörige Datensätze (Personas)</h3>
-                            <p className="text-xs text-muted-foreground">Füge für jeden Datensatz (z.B. jede der 30 Personas) Bilder hinzu.</p>
+                        <div className="space-y-2">
+                          <Label className="text-sm font-semibold">Seiten pro Persona</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={demoscope.pagesPerPersona}
+                            onChange={(e) => handleDemoscopePagesChange(parseInt(e.target.value) || 1)}
+                            disabled={isExtracting}
+                          />
+                          <p className="text-xs text-muted-foreground">Wie viele Screenshots gehören zu EINER Persona (z. B. 3 bei 3-seitigem Fragebogen).</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-sm font-semibold">Erkannte Personas</Label>
+                          <div className="h-10 flex items-center px-3 rounded-md border bg-muted/30 font-mono text-sm">
+                            {demoscope.images.length} Bilder ÷ {pp} = <span className="font-bold text-primary ml-1">{expectedPersonas}</span> Personas
                           </div>
-                          <div className="flex flex-wrap gap-2 justify-end">
+                          <p className="text-xs text-muted-foreground">Soll-Wert für die zweite Welle: 24.</p>
+                        </div>
+                      </div>
 
-                            <Button onClick={() => handleAddBatchItem(batch.id)} size="sm" variant="outline" className="gap-2">
-                              <PlusCircle className="w-4 h-4" /> Weiteren Datensatz hinzufügen
+                      <div className="border-2 border-dashed rounded-lg p-6 bg-muted/10 hover:bg-muted/20 transition-colors">
+                        <label className="flex flex-col items-center justify-center cursor-pointer text-center gap-2">
+                          <Upload className="w-8 h-8 text-muted-foreground" />
+                          <span className="text-sm font-medium">Screenshots hinzufügen (Mehrfach-Auswahl)</span>
+                          <span className="text-xs text-muted-foreground">PNG / JPG — alle 24 Personas auf einmal hochladbar</span>
+                          <input type="file" multiple accept="image/*" className="hidden" onChange={handleDemoscopeAddImages} disabled={isExtracting} />
+                        </label>
+                      </div>
+
+                      {hasImages && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-sm font-semibold">Hochgeladene Bilder ({demoscope.images.length})</Label>
+                            <Button variant="ghost" size="sm" className="text-destructive" onClick={handleDemoscopeReset} disabled={isExtracting}>
+                              <Trash2 className="w-3 h-3 mr-1" /> Alle entfernen
                             </Button>
                           </div>
-                        </div>
-
-                        <CardContent className="space-y-6 pt-4 bg-muted/5">
-                          {batch.items.length === 0 ? (
-                            <div className="text-center py-8 text-muted-foreground text-sm border-2 border-dashed rounded-lg border-muted-foreground/20">
-                              Noch keine Datensätze angelegt.
-                            </div>
-                          ) : (
-                            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                              {batch.items.map((item, idxx) => (
-                                <div key={item.id} className="relative group bg-background rounded-xl p-4 shadow-sm border">
-                                  <Button variant="ghost" size="icon" className="absolute right-2 top-2 h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => handleRemoveBatchItem(batch.id, item.id)}>
-                                    <X className="w-3 h-3" />
-                                  </Button>
-                                  <div className="text-sm font-semibold mb-3">Datensatz #{idxx + 1}</div>
-
-                                  <div className="flex flex-wrap gap-2 mb-4">
-                                    {item.images.map((imgUrl, i) => (
-                                      <div key={i} className="relative w-16 h-16 rounded-md overflow-hidden border shadow-sm">
-                                        <img src={imgUrl} className="w-full h-full object-cover" alt="Preview" />
-                                        <button className="absolute inset-0 bg-black/60 opacity-0 hover:opacity-100 items-center justify-center flex text-white" onClick={() => removeImageFromItem(batch.id, item.id, i)}>
-                                          <Trash2 className="w-3 h-3" />
-                                        </button>
-                                      </div>
-                                    ))}
-                                    {item.images.length < 10 && (
-                                      <label className="w-16 h-16 flex flex-col items-center justify-center border border-dashed rounded-md cursor-pointer hover:bg-muted/50 text-muted-foreground">
-                                        <Upload className="w-4 h-4 mb-1" />
-                                        <input type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleImageUpload(batch.id, item.id, e)} />
-                                      </label>
-                                    )}
-                                  </div>
-
-                                  <Button size="sm" className="w-full" disabled={item.images.length === 0 || item.status === 'loading'} onClick={() => handleExtractBatchItem(batch.id, item.id)}>
-                                    {item.status === 'loading' ? 'Extrahiert...' : item.status === 'success' ? 'Erneut extrahieren' : 'Auswerten'}
-                                  </Button>
-
-                                  {item.status === 'success' && <Badge className="absolute bottom-2 right-2 bg-green-500 hover:bg-green-600">Erledigt</Badge>}
-                                  {item.status === 'error' && <Badge variant="destructive" className="absolute bottom-2 right-2 max-w-[200px] truncate" title={item.result}>Fehler: {item.result}</Badge>}
+                          <div className="grid grid-cols-6 md:grid-cols-10 gap-2 max-h-64 overflow-y-auto p-2 border rounded-md bg-background">
+                            {demoscope.images.map((imgUrl, i) => (
+                              <div key={i} className="relative aspect-square rounded-md overflow-hidden border shadow-sm group">
+                                <img src={imgUrl} className="w-full h-full object-cover" alt={`Screenshot ${i + 1}`} />
+                                <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-[10px] px-1 py-0.5 font-mono text-center">
+                                  {i + 1} · P{Math.floor(i / pp) + 1}
                                 </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {tableData.rows.length > 0 && (
-                            <div className="mt-8 pt-6 border-t">
-                              <h3 className="font-semibold text-lg mb-4">Tabellarische Übersicht für {batch.modelName}</h3>
-                              <div className="overflow-x-auto rounded-lg border bg-background">
-                                <Table>
-                                  <TableHeader className="bg-muted/30">
-                                    <TableRow>
-                                      <TableHead className="font-bold whitespace-nowrap">Extrahierte Rolle / Profil</TableHead>
-                                      {tableData.columns.map(col => (
-                                        <TableHead key={col} className="text-center font-bold whitespace-nowrap">{col}</TableHead>
-                                      ))}
-                                    </TableRow>
-                                  </TableHeader>
-                                  <TableBody>
-                                    {tableData.rows.map((row, r_idx) => (
-                                      <TableRow key={r_idx}>
-                                        <TableCell className="font-medium">{row.Rolle}</TableCell>
-                                        {tableData.columns.map(col => (
-                                          <TableCell key={col} className="text-center">{row[col] ?? '-'}</TableCell>
-                                        ))}
-                                      </TableRow>
-                                    ))}
-                                  </TableBody>
-                                </Table>
+                                {!isExtracting && (
+                                  <button className="absolute right-1 top-1 bg-black/60 hover:bg-destructive rounded-full p-0.5 text-white opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDemoscopeRemoveImage(i)} title="Entfernen">
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                )}
                               </div>
-                            </div>
-                          )}
-
-                          <div className="mt-8 pt-6 border-t">
-                            <h3 className="font-semibold text-lg mb-4">Datensatz in Tresor-Lauf verwalten</h3>
-                            <p className="text-sm text-muted-foreground mb-4">Wähle einen oder mehrere Läufe aus, in denen diese extrahierten Daten gespeichert werden sollen.</p>
-
-                            <div className="rounded-lg border bg-background overflow-hidden">
-                              <Table>
-                                <TableHeader className="bg-muted/30">
-                                  <TableRow>
-                                    <TableHead className="font-semibold w-[60%]">Ziel-Lauf (Tresor)</TableHead>
-                                    <TableHead className="font-semibold text-center w-[20%]">Status</TableHead>
-                                    <TableHead className="text-right w-[20%]"></TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {historicRuns.length === 0 && (
-                                    <TableRow>
-                                      <TableCell colSpan={3} className="text-center text-muted-foreground py-6">Keine Läufe vorhanden</TableCell>
-                                    </TableRow>
-                                  )}
-                                  {historicRuns.map(run => {
-                                    const isAdded = batch.targetRunIds && batch.targetRunIds.includes(run.id);
-                                    return (
-                                      <TableRow key={run.id} className={isAdded ? "bg-primary/5" : ""}>
-                                        <TableCell className="font-medium">
-                                          {run.name} <span className="text-muted-foreground font-normal ml-2">({new Date(run.created_at).toLocaleDateString('de-CH')})</span>
-                                        </TableCell>
-                                        <TableCell className="text-center">
-                                          {isAdded ? (
-                                            <Badge className="bg-green-500 hover:bg-green-600">Hinzugefügt</Badge>
-                                          ) : (
-                                            <Badge variant="outline" className="text-muted-foreground border-muted-foreground/30">Nicht hinzugefügt</Badge>
-                                          )}
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                          {isAdded ? (
-                                            <Button
-                                              size="sm"
-                                              variant="ghost"
-                                              className="text-destructive hover:text-destructive hover:bg-destructive/10 z-10"
-                                              onClick={() => handleRemoveBatchFromRun(batch.id, run.id)}
-                                            >
-                                              Wieder entfernen
-                                            </Button>
-                                          ) : (
-                                            <Button
-                                              size="sm"
-                                              variant="outline"
-                                              className="border-primary text-primary hover:bg-primary/10 z-10"
-                                              onClick={() => handleSyncBatchToRun(batch.id, run.id)}
-                                              disabled={batch.items.filter(i => i.status === 'success' && i.result).length === 0}
-                                            >
-                                              Zu Lauf hinzufügen
-                                            </Button>
-                                          )}
-                                        </TableCell>
-                                      </TableRow>
-                                    );
-                                  })}
-                                </TableBody>
-                              </Table>
-                            </div>
+                            ))}
                           </div>
+                        </div>
+                      )}
 
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
+                      <div className="flex items-center justify-between pt-2 border-t">
+                        <div className="text-sm text-muted-foreground">
+                          {!hasImages && <>Lade Screenshots hoch, um zu starten.</>}
+                          {hasImages && demoscope.status === 'idle' && <>Bereit für Stapel-Auswertung von <span className="font-bold text-foreground">{expectedPersonas}</span> Personas.</>}
+                          {isExtracting && <>Verarbeite {totalProgress + loadingN}/{totalToProcess} ({successN} ✓, {errorN} ✗, {loadingN + pendingN} offen)</>}
+                          {demoscope.status === 'done' && <>Fertig: <span className="text-green-600 font-bold">{successN}</span> erfolgreich, <span className="text-red-600 font-bold">{errorN}</span> Fehler — bereits im Dashboard sichtbar.</>}
+                        </div>
+                        <Button onClick={runDemoscopeExtraction} disabled={!hasImages || isExtracting || !apiKey} size="lg" className="gap-2">
+                          {isExtracting ? <>Extrahiere {totalProgress + 1}/{totalToProcess}...</> : <><FlaskConical className="w-4 h-4" /> Alle auswerten</>}
+                        </Button>
+                      </div>
+
+                      {!apiKey && (
+                        <div className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-md p-3">
+                          Hinweis: Es ist kein OpenRouter-API-Key konfiguriert. Bitte unter Settings eintragen — die Vision-Extraktion läuft über GPT-4o.
+                        </div>
+                      )}
+
+                      {demoscope.results.length > 0 && (
+                        <div className="space-y-3 pt-4">
+                          <Label className="text-sm font-semibold">Extraktions-Status pro Persona</Label>
+                          <div className="overflow-x-auto rounded-md border max-h-96 overflow-y-auto">
+                            <Table>
+                              <TableHeader className="bg-muted/40 sticky top-0">
+                                <TableRow>
+                                  <TableHead className="w-[60px] font-semibold text-center">#</TableHead>
+                                  <TableHead className="w-[110px] font-semibold">Status</TableHead>
+                                  <TableHead className="w-[200px] font-semibold">Erkannte Rolle</TableHead>
+                                  <TableHead className="font-semibold">Profil-Highlights</TableHead>
+                                  <TableHead className="w-[100px] text-center font-semibold">Antworten</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {demoscope.results.map((r, idx) => {
+                                  const answersN = r.status === 'success' ? Object.keys(parseAnswers(r.response)).length : 0;
+                                  const profileChips = Object.entries(r.combo).filter(([k, v]) => k !== 'Rolle' && v).slice(0, 4);
+                                  return (
+                                    <TableRow key={r.id}>
+                                      <TableCell className="text-center font-mono text-muted-foreground">{idx + 1}</TableCell>
+                                      <TableCell>
+                                        <Badge variant={r.status === 'success' ? 'default' : r.status === 'error' ? 'destructive' : 'secondary'} className="text-[10px] w-20 justify-center">
+                                          {r.status}
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell className="font-medium">
+                                        {r.combo.Rolle || '—'}
+                                      </TableCell>
+                                      <TableCell>
+                                        <div className="flex flex-wrap gap-1">
+                                          {profileChips.map(([k, v]) => (
+                                            <span key={k} className="bg-muted px-1.5 py-0.5 rounded text-[10px] font-mono text-muted-foreground" title={k}>
+                                              {String(v)}
+                                            </span>
+                                          ))}
+                                          {r.error && <span className="text-xs text-destructive">{r.error}</span>}
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="text-center tabular-nums text-muted-foreground">
+                                        {answersN > 0 ? answersN : '—'}
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })()}
             </div>
           )}
 
