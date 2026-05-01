@@ -318,11 +318,15 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   };
 
   type DemoscopeUpload = {
-    images: string[];           // alle hochgeladenen Screenshots in Reihenfolge
-    pagesPerPersona: number;    // wie viele Screenshots gehören zu EINER Persona
+    images: string[];           // alle hochgeladenen Screenshots in Reihenfolge (flache Liste, Preview)
+    pagesPerPersona: number;    // wie viele Screenshots gehören zu EINER Persona (nur fuer flachen Upload)
     modelName: string;          // erscheint als modelId im Dashboard
     status: 'idle' | 'extracting' | 'done';
     results: DemoscopePersona[];
+    // Beim Ordner-Upload (webkitdirectory) gruppiert der Browser bereits pro Persona-Ordner.
+    // Wenn gesetzt, ueberschreibt das die pagesPerPersona-Logik: 1 Gruppe = 1 Persona = 1 Vision-Call.
+    imageGroups?: string[][];
+    groupLabels?: string[];     // Persona-Ordnernamen (z. B. "CEM-m-30-39-CH-1PkK-...")
   };
 
   const [demoscope, setDemoscope] = useLocalStorage<DemoscopeUpload>('pp_demoscope_v1', {
@@ -350,15 +354,106 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     // Sortiere nach Dateiname, damit die User-Reihenfolge auch bei Multi-Select stimmt.
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     const newImages = await fileListToBase64(files);
-    setDemoscope(prev => ({ ...prev, images: [...prev.images, ...newImages], status: 'idle', results: [] }));
+    // Flacher Upload: kollidiert mit Ordner-Gruppen, also Gruppen verwerfen.
+    setDemoscope(prev => ({
+      ...prev,
+      images: [...prev.images, ...newImages],
+      imageGroups: undefined,
+      groupLabels: undefined,
+      status: 'idle',
+      results: []
+    }));
+  };
+
+  // Ordner-Upload: gruppiert Screenshots automatisch nach direktem Eltern-Ordner
+  // (webkitRelativePath = "Profile/CEM-m-.../screenshot.png"). Eine Gruppe = eine Persona.
+  const handleDemoscopeAddFolder = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const grouped = new Map<string, File[]>();
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      const parts = relPath.split('/');
+      // Direkter Eltern-Ordner = vorletztes Pfadelement; bei flacher Liste -> "(Wurzel)".
+      const parent = parts.length >= 2 ? parts[parts.length - 2] : '(Wurzel)';
+      if (!grouped.has(parent)) grouped.set(parent, []);
+      grouped.get(parent)!.push(file);
+    }
+
+    if (grouped.size === 0) return;
+
+    const sortedFolders = Array.from(grouped.keys()).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+
+    const groupLabels: string[] = [];
+    const imageGroups: string[][] = [];
+    const flatImages: string[] = [];
+
+    for (const folder of sortedFolders) {
+      const folderFiles = grouped.get(folder)!;
+      folderFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const base64s = await fileListToBase64(folderFiles);
+      groupLabels.push(folder);
+      imageGroups.push(base64s);
+      flatImages.push(...base64s);
+    }
+
+    setDemoscope(prev => ({
+      ...prev,
+      images: flatImages,
+      imageGroups,
+      groupLabels,
+      status: 'idle',
+      results: []
+    }));
   };
 
   const handleDemoscopeRemoveImage = (index: number) => {
-    setDemoscope(prev => ({ ...prev, images: prev.images.filter((_, i) => i !== index), status: 'idle', results: [] }));
+    setDemoscope(prev => {
+      const newImages = prev.images.filter((_, i) => i !== index);
+      // Wenn Ordner-Gruppen aktiv sind, auch dort die richtige Stelle entfernen.
+      if (prev.imageGroups && prev.imageGroups.length > 0) {
+        let cursor = 0;
+        const groups: string[][] = [];
+        const labels: string[] = [];
+        prev.imageGroups.forEach((g, gi) => {
+          const size = g.length;
+          let updated = g;
+          if (index >= cursor && index < cursor + size) {
+            updated = g.filter((_, i) => i !== index - cursor);
+          }
+          if (updated.length > 0) {
+            groups.push(updated);
+            labels.push(prev.groupLabels?.[gi] || '');
+          }
+          cursor += size;
+        });
+        return {
+          ...prev,
+          images: newImages,
+          imageGroups: groups.length > 0 ? groups : undefined,
+          groupLabels: groups.length > 0 ? labels : undefined,
+          status: 'idle',
+          results: []
+        };
+      }
+      return { ...prev, images: newImages, status: 'idle', results: [] };
+    });
   };
 
   const handleDemoscopeReset = () => {
-    setDemoscope({ images: [], pagesPerPersona: 1, modelName: 'Demoscope', status: 'idle', results: [] });
+    setDemoscope({
+      images: [],
+      pagesPerPersona: 1,
+      modelName: 'Demoscope',
+      status: 'idle',
+      results: [],
+      imageGroups: undefined,
+      groupLabels: undefined
+    });
   };
 
   const handleDemoscopePagesChange = (n: number) => {
@@ -396,16 +491,26 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     }
     if (demoscope.images.length === 0) return;
 
-    const pp = Math.max(1, demoscope.pagesPerPersona);
-    const chunks: string[][] = [];
-    for (let i = 0; i < demoscope.images.length; i += pp) {
-      chunks.push(demoscope.images.slice(i, i + pp));
+    // Ordner-Upload setzt imageGroups (1 Persona = 1 Ordner = 1 Vision-Call).
+    // Flacher Upload faellt auf pagesPerPersona-Chunking zurueck.
+    let chunks: string[][];
+    let labels: (string | undefined)[];
+    if (demoscope.imageGroups && demoscope.imageGroups.length > 0) {
+      chunks = demoscope.imageGroups;
+      labels = demoscope.groupLabels || [];
+    } else {
+      const pp = Math.max(1, demoscope.pagesPerPersona);
+      chunks = [];
+      for (let i = 0; i < demoscope.images.length; i += pp) {
+        chunks.push(demoscope.images.slice(i, i + pp));
+      }
+      labels = chunks.map(() => undefined);
     }
     const ts = Date.now();
     const initialResults: DemoscopePersona[] = chunks.map((imgs, i) => ({
       id: `offline-demoscope-${ts}-${i}`,
       images: imgs,
-      combo: { Rolle: 'Erkenne...' },
+      combo: { Rolle: labels[i] ? `Erkenne... (${labels[i]})` : 'Erkenne...' },
       response: '',
       status: 'pending'
     }));
@@ -1546,7 +1651,10 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
 
               {(() => {
                 const pp = Math.max(1, demoscope.pagesPerPersona);
-                const expectedPersonas = Math.ceil(demoscope.images.length / pp);
+                const usingGroups = !!(demoscope.imageGroups && demoscope.imageGroups.length > 0);
+                const expectedPersonas = usingGroups
+                  ? demoscope.imageGroups!.length
+                  : Math.ceil(demoscope.images.length / pp);
                 const hasImages = demoscope.images.length > 0;
                 const isExtracting = demoscope.status === 'extracting';
                 const successN = demoscope.results.filter(r => r.status === 'success').length;
@@ -1555,13 +1663,24 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                 const pendingN = demoscope.results.filter(r => r.status === 'pending').length;
                 const totalProgress = successN + errorN;
                 const totalToProcess = demoscope.results.length;
+                // Pro Bild auf seine Gruppe (Persona) abbilden, damit das Preview-Label stimmt.
+                const imageGroupIndex: number[] = [];
+                const imageIndexInGroup: number[] = [];
+                if (usingGroups) {
+                  demoscope.imageGroups!.forEach((g, gi) => {
+                    g.forEach((_, ii) => {
+                      imageGroupIndex.push(gi);
+                      imageIndexInGroup.push(ii);
+                    });
+                  });
+                }
 
                 return (
                   <Card className="border-primary/20 shadow-sm">
                     <CardHeader className="border-b bg-muted/5">
                       <CardTitle className="text-xl flex items-center gap-2"><Database className="w-5 h-5" /> Upload &amp; Stapel-Auswertung</CardTitle>
                       <CardDescription>
-                        Drag &amp; Drop oder klicke aufs Upload-Feld. Mehrfach-Selektion erlaubt. Reihenfolge wird automatisch nach Dateiname sortiert (z. B. <span className="font-mono">persona-01-page-1.png</span>).
+                        Zwei Upload-Wege: <span className="font-semibold">(1) Ordner hochladen</span> — wähle den <span className="font-mono">Profile/</span>-Ordner, jeder Persona-Unterordner wird automatisch als eine Persona gruppiert. <span className="font-semibold">(2) Einzeldateien</span> — flache Mehrfach-Auswahl, gechunked nach <span className="font-mono">Seiten pro Persona</span>.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="pt-6 space-y-6">
@@ -1582,26 +1701,52 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                             min={1}
                             value={demoscope.pagesPerPersona}
                             onChange={(e) => handleDemoscopePagesChange(parseInt(e.target.value) || 1)}
-                            disabled={isExtracting}
+                            disabled={isExtracting || usingGroups}
                           />
-                          <p className="text-xs text-muted-foreground">Wie viele Screenshots gehören zu EINER Persona (z. B. 3 bei 3-seitigem Fragebogen).</p>
+                          <p className="text-xs text-muted-foreground">
+                            {usingGroups
+                              ? 'Wird ignoriert: Gruppierung kommt aus den Persona-Ordnern.'
+                              : 'Wie viele Screenshots gehören zu EINER Persona (z. B. 3 bei 3-seitigem Fragebogen).'}
+                          </p>
                         </div>
                         <div className="space-y-2">
                           <Label className="text-sm font-semibold">Erkannte Personas</Label>
                           <div className="h-10 flex items-center px-3 rounded-md border bg-muted/30 font-mono text-sm">
-                            {demoscope.images.length} Bilder ÷ {pp} = <span className="font-bold text-primary ml-1">{expectedPersonas}</span> Personas
+                            {usingGroups ? (
+                              <>{demoscope.images.length} Bilder in <span className="font-bold text-primary ml-1">{expectedPersonas}</span> Persona-Ordnern</>
+                            ) : (
+                              <>{demoscope.images.length} Bilder ÷ {pp} = <span className="font-bold text-primary ml-1">{expectedPersonas}</span> Personas</>
+                            )}
                           </div>
                           <p className="text-xs text-muted-foreground">Soll-Wert für die zweite Welle: 24.</p>
                         </div>
                       </div>
 
-                      <div className="border-2 border-dashed rounded-lg p-6 bg-muted/10 hover:bg-muted/20 transition-colors">
-                        <label className="flex flex-col items-center justify-center cursor-pointer text-center gap-2">
-                          <Upload className="w-8 h-8 text-muted-foreground" />
-                          <span className="text-sm font-medium">Screenshots hinzufügen (Mehrfach-Auswahl)</span>
-                          <span className="text-xs text-muted-foreground">PNG / JPG — alle 24 Personas auf einmal hochladbar</span>
-                          <input type="file" multiple accept="image/*" className="hidden" onChange={handleDemoscopeAddImages} disabled={isExtracting} />
-                        </label>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="border-2 border-dashed border-primary/40 rounded-lg p-6 bg-primary/5 hover:bg-primary/10 transition-colors">
+                          <label className="flex flex-col items-center justify-center cursor-pointer text-center gap-2">
+                            <Database className="w-8 h-8 text-primary" />
+                            <span className="text-sm font-semibold">Ordner hochladen (empfohlen)</span>
+                            <span className="text-xs text-muted-foreground">Wähle den <span className="font-mono">Profile/</span>-Ordner — jeder Unterordner = 1 Persona</span>
+                            <input
+                              type="file"
+                              multiple
+                              accept="image/*"
+                              className="hidden"
+                              onChange={handleDemoscopeAddFolder}
+                              disabled={isExtracting}
+                              {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
+                            />
+                          </label>
+                        </div>
+                        <div className="border-2 border-dashed rounded-lg p-6 bg-muted/10 hover:bg-muted/20 transition-colors">
+                          <label className="flex flex-col items-center justify-center cursor-pointer text-center gap-2">
+                            <Upload className="w-8 h-8 text-muted-foreground" />
+                            <span className="text-sm font-medium">Einzeldateien</span>
+                            <span className="text-xs text-muted-foreground">Flache Mehrfach-Auswahl, gechunked nach <span className="font-mono">Seiten pro Persona</span></span>
+                            <input type="file" multiple accept="image/*" className="hidden" onChange={handleDemoscopeAddImages} disabled={isExtracting} />
+                          </label>
+                        </div>
                       </div>
 
                       {hasImages && (
@@ -1613,19 +1758,24 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                             </Button>
                           </div>
                           <div className="grid grid-cols-6 md:grid-cols-10 gap-2 max-h-64 overflow-y-auto p-2 border rounded-md bg-background">
-                            {demoscope.images.map((imgUrl, i) => (
-                              <div key={i} className="relative aspect-square rounded-md overflow-hidden border shadow-sm group">
-                                <img src={imgUrl} className="w-full h-full object-cover" alt={`Screenshot ${i + 1}`} />
-                                <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-[10px] px-1 py-0.5 font-mono text-center">
-                                  {i + 1} · P{Math.floor(i / pp) + 1}
+                            {demoscope.images.map((imgUrl, i) => {
+                              const gi = usingGroups ? imageGroupIndex[i] : Math.floor(i / pp);
+                              const ii = usingGroups ? imageIndexInGroup[i] : i % pp;
+                              const folderLabel = usingGroups ? demoscope.groupLabels?.[gi] : undefined;
+                              return (
+                                <div key={i} className="relative aspect-square rounded-md overflow-hidden border shadow-sm group">
+                                  <img src={imgUrl} className="w-full h-full object-cover" alt={`Screenshot ${i + 1}`} />
+                                  <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-[10px] px-1 py-0.5 font-mono text-center truncate" title={folderLabel || `Persona ${gi + 1}`}>
+                                    {folderLabel ? `${folderLabel.slice(0, 14)}…` : `P${gi + 1}`} · {ii + 1}
+                                  </div>
+                                  {!isExtracting && (
+                                    <button className="absolute right-1 top-1 bg-black/60 hover:bg-destructive rounded-full p-0.5 text-white opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDemoscopeRemoveImage(i)} title="Entfernen">
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  )}
                                 </div>
-                                {!isExtracting && (
-                                  <button className="absolute right-1 top-1 bg-black/60 hover:bg-destructive rounded-full p-0.5 text-white opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDemoscopeRemoveImage(i)} title="Entfernen">
-                                    <X className="w-3 h-3" />
-                                  </button>
-                                )}
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       )}
