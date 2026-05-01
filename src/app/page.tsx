@@ -19,13 +19,19 @@ function useLocalStorage<T>(key: string, initialValue: T) {
   }, [key]);
 
   const setValue = (value: T | ((val: T) => T)) => {
-    try {
-      const valueToStore = value instanceof Function ? value(storedValue) : value;
-      setStoredValue(valueToStore);
-      window.localStorage.setItem(key, JSON.stringify(valueToStore));
-    } catch (error) {
-      console.warn('Error setting localStorage', error);
-    }
+    // WICHTIG: setStoredValue mit Updater-Funktion aufrufen, damit React den
+    // *aktuellen* State reinreicht statt dem closure-gefangenen storedValue.
+    // Ohne das ueberschreiben sich Updates, die ueber awaits hinweg passieren
+    // (z. B. die Demoscope-Extraktion in einer for-Loop), gegenseitig.
+    setStoredValue(prev => {
+      const next = value instanceof Function ? (value as (v: T) => T)(prev) : value;
+      try {
+        window.localStorage.setItem(key, JSON.stringify(next));
+      } catch (error) {
+        console.warn('Error setting localStorage', error);
+      }
+      return next;
+    });
   };
 
   return [storedValue, setValue] as const;
