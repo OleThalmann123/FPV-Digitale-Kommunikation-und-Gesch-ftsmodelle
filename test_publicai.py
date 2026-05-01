@@ -40,7 +40,10 @@ def test_chat_completion(api_key, model_id, prompt):
         return None
 
 def main():
-    api_key = "zpka_a401f6eba2f440e3a7807bf9dafe7d20_1d367ff1"
+    api_key = os.environ.get("PUBLICAI_API_KEY", "")
+    if not api_key:
+        print("Fehler: PUBLICAI_API_KEY env var ist nicht gesetzt. In .env.local eintragen oder shell-export setzen.")
+        return
     
     print("Testing Public AI API...")
     print("1. Fetching available models...")
