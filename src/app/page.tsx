@@ -483,7 +483,10 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   // anschliessend gemerged: Profil-Felder per "first non-empty wins" (Profil
   // sollte ueberall identisch sein), Antworten per Object.assign (jede Frage
   // taucht idealerweise in genau einem Sub-Batch auf).
-  const SUB_CHUNK_SIZE = 10;
+  // Konservativ klein: bei ~30 WhatsApp-Screenshots/Persona haben 10er-Batches
+  // gegen Vercels Body-Limit (~4.5 MB Pro) und das 60 s Function-Timeout
+  // gedrueckt. 5er-Batches halbieren beides und sind immer noch schnell genug.
+  const SUB_CHUNK_SIZE = 5;
   const tryParseVisionJson = (raw: string): { profil?: Record<string, string>; antworten?: Record<string, unknown> } => {
     try {
       const match = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
