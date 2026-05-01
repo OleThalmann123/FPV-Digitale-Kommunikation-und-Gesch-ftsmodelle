@@ -180,6 +180,46 @@ const AVAILABLE_ROLES = [
   'Kommunikation Manager',
   'Webseiten Manager'
 ];
+
+// Persona-Ordner-Schema: ROLE-GENDER-AGEMIN-AGEMAX-COUNTRY-HOUSEHOLD-EDU-EXPMIN-EXPMAX-ZIP
+// z. B. "CEM-m-30-39-CH-1PkK-M-5-7-9000". Der Parser ist die Single Source of
+// Truth fuer das Persona-Profil, Vision extrahiert nur noch die Fragebogen-
+// Antworten -- so vermeiden wir, dass Vision Fragetexte als Profilwerte
+// halluziniert (z. B. die Hochschultypen-Liste als "Ausbildung").
+const FOLDER_ROLE_MAP: Record<string, string> = {
+  CEM: 'CEM (Customer Experience Manager)',
+  SMM: 'SMM (Social Media Manager)',
+  DMM: 'DMM (Digital Manager)',
+  GWM: 'Growth Manager',
+  KOM: 'Kommunikation Manager',
+  WEM: 'Webseiten Manager',
+};
+const FOLDER_HOUSEHOLD_MAP: Record<string, string> = {
+  '1PkK': '1 Person kein Kind',
+  '2P1K': '2 Personen 1 Kind',
+};
+const FOLDER_EDUCATION_MAP: Record<string, string> = {
+  M: 'Master',
+  B: 'Bachelor',
+};
+function parseFolderName(name: string): Record<string, string> | null {
+  const parts = name.split('-');
+  if (parts.length !== 10) return null;
+  const [role, gender, ageMin, ageMax, country, household, edu, expMin, expMax, zip] = parts;
+  if (!FOLDER_ROLE_MAP[role]) return null;
+  return {
+    Rolle: FOLDER_ROLE_MAP[role],
+    Geschlecht: gender === 'm' ? 'Männlich' : gender === 'w' ? 'Weiblich' : '',
+    Alter: `${ageMin}-${ageMax} Jahre`,
+    Nationalitaet: country === 'CH' ? 'Schweiz' : country,
+    Haushalt: FOLDER_HOUSEHOLD_MAP[household] || household,
+    Ausbildung: FOLDER_EDUCATION_MAP[edu] || edu,
+    Berufserfahrung: `${expMin}-${expMax} Jahre`,
+    Wohnsitzland: country === 'CH' ? 'Schweiz' : country,
+    Postleitzahl: zip,
+    Avatar_Eigenschaften_und_Praeferenzen: '',
+  };
+}
 export default function PromptPlatform() {
   const [mounted, setMounted] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -335,6 +375,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     // Wenn gesetzt, ueberschreibt das die pagesPerPersona-Logik: 1 Gruppe = 1 Persona = 1 Vision-Call.
     imageGroups?: string[][];
     groupLabels?: string[];     // Persona-Ordnernamen (z. B. "CEM-m-30-39-CH-1PkK-...")
+    groupCombos?: Record<string, string>[]; // aus dem Ordnernamen geparste Profile (autoritativ, falls vorhanden)
   };
 
   // Bewusst useState statt useLocalStorage: 24 Personas x ~30 base64-Screenshots
@@ -373,6 +414,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       images: [...prev.images, ...newImages],
       imageGroups: undefined,
       groupLabels: undefined,
+      groupCombos: undefined,
       status: 'idle',
       results: []
     }));
@@ -403,6 +445,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
 
     const groupLabels: string[] = [];
     const imageGroups: string[][] = [];
+    const groupCombos: Record<string, string>[] = [];
     const flatImages: string[] = [];
 
     for (const folder of sortedFolders) {
@@ -411,6 +454,9 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       const base64s = await fileListToBase64(folderFiles);
       groupLabels.push(folder);
       imageGroups.push(base64s);
+      // Parser darf scheitern (z. B. wenn der User mal anders benannte Ordner laedt) --
+      // dann fallen wir spaeter auf das Vision-Profil zurueck.
+      groupCombos.push(parseFolderName(folder) || {});
       flatImages.push(...base64s);
     }
 
@@ -419,6 +465,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       images: flatImages,
       imageGroups,
       groupLabels,
+      groupCombos,
       status: 'idle',
       results: []
     }));
@@ -432,6 +479,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
         let cursor = 0;
         const groups: string[][] = [];
         const labels: string[] = [];
+        const combos: Record<string, string>[] = [];
         prev.imageGroups.forEach((g, gi) => {
           const size = g.length;
           let updated = g;
@@ -441,6 +489,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
           if (updated.length > 0) {
             groups.push(updated);
             labels.push(prev.groupLabels?.[gi] || '');
+            combos.push(prev.groupCombos?.[gi] || {});
           }
           cursor += size;
         });
@@ -449,6 +498,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
           images: newImages,
           imageGroups: groups.length > 0 ? groups : undefined,
           groupLabels: groups.length > 0 ? labels : undefined,
+          groupCombos: groups.length > 0 ? combos : undefined,
           status: 'idle',
           results: []
         };
@@ -465,7 +515,8 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       status: 'idle',
       results: [],
       imageGroups: undefined,
-      groupLabels: undefined
+      groupLabels: undefined,
+      groupCombos: undefined,
     });
   };
 
@@ -560,9 +611,11 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     // Flacher Upload faellt auf pagesPerPersona-Chunking zurueck.
     let chunks: string[][];
     let labels: (string | undefined)[];
+    let folderCombos: (Record<string, string> | undefined)[];
     if (demoscope.imageGroups && demoscope.imageGroups.length > 0) {
       chunks = demoscope.imageGroups;
       labels = demoscope.groupLabels || [];
+      folderCombos = demoscope.groupCombos || [];
     } else {
       const pp = Math.max(1, demoscope.pagesPerPersona);
       chunks = [];
@@ -570,20 +623,31 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
         chunks.push(demoscope.images.slice(i, i + pp));
       }
       labels = chunks.map(() => undefined);
+      folderCombos = chunks.map(() => undefined);
     }
     // Optionales Limit (z. B. "Nur 1 Persona testen") -- spart Vision-Kosten beim Probelauf.
     if (opts?.limit && opts.limit > 0 && opts.limit < chunks.length) {
       chunks = chunks.slice(0, opts.limit);
       labels = labels.slice(0, opts.limit);
+      folderCombos = folderCombos.slice(0, opts.limit);
     }
     const ts = Date.now();
-    const initialResults: DemoscopePersona[] = chunks.map((imgs, i) => ({
-      id: `offline-demoscope-${ts}-${i}`,
-      images: imgs,
-      combo: { Rolle: labels[i] ? `Erkenne... (${labels[i]})` : 'Erkenne...' },
-      response: '',
-      status: 'pending'
-    }));
+    const hasFolderCombo = (c?: Record<string, string>) => !!(c && c.Rolle);
+    const initialResults: DemoscopePersona[] = chunks.map((imgs, i) => {
+      // Wenn der Ordnername parsbar war, ist die combo schon final -- Vision
+      // veraendert sie nicht mehr, sondern liefert nur die Antworten.
+      const fc = folderCombos[i];
+      const initialCombo = hasFolderCombo(fc)
+        ? { ...fc! }
+        : { Rolle: labels[i] ? `Erkenne... (${labels[i]})` : 'Erkenne...' };
+      return {
+        id: `offline-demoscope-${ts}-${i}`,
+        images: imgs,
+        combo: initialCombo,
+        response: '',
+        status: 'pending'
+      };
+    });
     setDemoscope(prev => ({ ...prev, status: 'extracting', results: initialResults }));
 
     // Sequenziell, um die Vision-API nicht zu überlasten und Kosten zu kontrollieren.
@@ -594,7 +658,11 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       }));
       try {
         const raw = await extractPersonaInChunks(chunks[i]);
-        const { combo, response } = parseDemoscopeExtraction(raw);
+        const { combo: visionCombo, response } = parseDemoscopeExtraction(raw);
+        // Folder-combo gewinnt komplett, wenn vorhanden -- Vision hat in der
+        // Vergangenheit z. B. Hochschultypen-Listen als "Ausbildung" halluziniert.
+        const fc = folderCombos[i];
+        const combo = hasFolderCombo(fc) ? { ...fc! } : visionCombo;
         setDemoscope(prev => ({
           ...prev,
           results: prev.results.map((r, idx) => idx === i ? { ...r, status: 'success', combo, response } : r)
@@ -1714,7 +1782,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                 <div>
                   <h2 className="text-3xl font-bold tracking-tight">Demoscope-Datensatz</h2>
                   <p className="text-muted-foreground max-w-3xl">
-                    Lade alle Screenshots auf einmal hoch. Die Vision-API erkennt die Rolle automatisch, extrahiert das Profil und alle Antworten und legt jede Persona als virtuelles Modell <span className="font-mono">{demoscope.modelName}</span> in deine Auswertung — gleiche Logik wie Apertus / gpt-4o-mini.
+                    Lade den <span className="font-mono">Profile/</span>-Ordner hoch. Das Persona-Profil (Rolle, Geschlecht, Alter, Haushalt …) kommt deterministisch aus dem Ordnernamen — Vision extrahiert nur noch die Fragebogen-Antworten. Jede Persona landet als virtuelles Modell <span className="font-mono">{demoscope.modelName}</span> in der Auswertung — gleiche Logik wie Apertus / gpt-4o-mini.
                   </p>
                 </div>
               </div>
@@ -1733,17 +1801,6 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                 const pendingN = demoscope.results.filter(r => r.status === 'pending').length;
                 const totalProgress = successN + errorN;
                 const totalToProcess = demoscope.results.length;
-                // Pro Bild auf seine Gruppe (Persona) abbilden, damit das Preview-Label stimmt.
-                const imageGroupIndex: number[] = [];
-                const imageIndexInGroup: number[] = [];
-                if (usingGroups) {
-                  demoscope.imageGroups!.forEach((g, gi) => {
-                    g.forEach((_, ii) => {
-                      imageGroupIndex.push(gi);
-                      imageIndexInGroup.push(ii);
-                    });
-                  });
-                }
 
                 return (
                   <Card className="border-primary/20 shadow-sm">
@@ -1819,7 +1876,71 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                         </div>
                       </div>
 
-                      {hasImages && (
+                      {hasImages && usingGroups && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-sm font-semibold">
+                              Hochgeladene Bilder · {demoscope.imageGroups!.length} Persona-Ordner · {demoscope.images.length} Screenshots
+                            </Label>
+                            <Button variant="ghost" size="sm" className="text-destructive" onClick={handleDemoscopeReset} disabled={isExtracting}>
+                              <Trash2 className="w-3 h-3 mr-1" /> Alle entfernen
+                            </Button>
+                          </div>
+                          <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                            {demoscope.imageGroups!.map((groupImages, gi) => {
+                              const folderLabel = demoscope.groupLabels?.[gi] || `Persona ${gi + 1}`;
+                              const combo = demoscope.groupCombos?.[gi];
+                              const parsed = !!(combo && combo.Rolle);
+                              // Flat-Index pro Bild fuer den Remove-Handler.
+                              let flatStart = 0;
+                              for (let k = 0; k < gi; k++) flatStart += demoscope.imageGroups![k].length;
+                              return (
+                                <div key={gi} className="border rounded-md bg-background">
+                                  <div className="flex items-start justify-between gap-3 px-3 py-2 border-b bg-muted/30">
+                                    <div className="space-y-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <Badge variant="outline" className="font-mono text-[10px]">P{gi + 1}</Badge>
+                                        <span className="font-mono text-xs truncate" title={folderLabel}>{folderLabel}</span>
+                                        <span className="text-xs text-muted-foreground">· {groupImages.length} Screenshots</span>
+                                      </div>
+                                      {parsed ? (
+                                        <div className="flex flex-wrap gap-1 pt-0.5">
+                                          <Badge variant="default" className="text-[10px]">{combo!.Rolle}</Badge>
+                                          {['Geschlecht','Alter','Haushalt','Ausbildung','Berufserfahrung','Wohnsitzland','Postleitzahl'].map(k => combo![k] ? (
+                                            <span key={k} className="bg-muted px-1.5 py-0.5 rounded text-[10px] font-mono text-muted-foreground" title={k}>{combo![k]}</span>
+                                          ) : null)}
+                                        </div>
+                                      ) : (
+                                        <div className="text-[10px] text-amber-600">Ordnername passt nicht ins Schema — Profil kommt aus Vision.</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="grid grid-cols-6 md:grid-cols-10 gap-2 p-2">
+                                    {groupImages.map((imgUrl, ii) => {
+                                      const flatIdx = flatStart + ii;
+                                      return (
+                                        <div key={ii} className="relative aspect-square rounded-md overflow-hidden border shadow-sm group">
+                                          <img src={imgUrl} className="w-full h-full object-cover" alt={`${folderLabel} ${ii + 1}`} />
+                                          <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-[10px] px-1 py-0.5 font-mono text-center">
+                                            {ii + 1}
+                                          </div>
+                                          {!isExtracting && (
+                                            <button className="absolute right-1 top-1 bg-black/60 hover:bg-destructive rounded-full p-0.5 text-white opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDemoscopeRemoveImage(flatIdx)} title="Entfernen">
+                                              <X className="w-3 h-3" />
+                                            </button>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {hasImages && !usingGroups && (
                         <div className="space-y-3">
                           <div className="flex items-center justify-between">
                             <Label className="text-sm font-semibold">Hochgeladene Bilder ({demoscope.images.length})</Label>
@@ -1829,14 +1950,13 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                           </div>
                           <div className="grid grid-cols-6 md:grid-cols-10 gap-2 max-h-64 overflow-y-auto p-2 border rounded-md bg-background">
                             {demoscope.images.map((imgUrl, i) => {
-                              const gi = usingGroups ? imageGroupIndex[i] : Math.floor(i / pp);
-                              const ii = usingGroups ? imageIndexInGroup[i] : i % pp;
-                              const folderLabel = usingGroups ? demoscope.groupLabels?.[gi] : undefined;
+                              const gi = Math.floor(i / pp);
+                              const ii = i % pp;
                               return (
                                 <div key={i} className="relative aspect-square rounded-md overflow-hidden border shadow-sm group">
                                   <img src={imgUrl} className="w-full h-full object-cover" alt={`Screenshot ${i + 1}`} />
-                                  <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-[10px] px-1 py-0.5 font-mono text-center truncate" title={folderLabel || `Persona ${gi + 1}`}>
-                                    {folderLabel ? `${folderLabel.slice(0, 14)}…` : `P${gi + 1}`} · {ii + 1}
+                                  <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-[10px] px-1 py-0.5 font-mono text-center">
+                                    P{gi + 1} · {ii + 1}
                                   </div>
                                   {!isExtracting && (
                                     <button className="absolute right-1 top-1 bg-black/60 hover:bg-destructive rounded-full p-0.5 text-white opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDemoscopeRemoveImage(i)} title="Entfernen">
