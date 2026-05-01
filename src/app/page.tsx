@@ -464,6 +464,56 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     setDemoscope(prev => ({ ...prev, modelName: name }));
   };
 
+  // Bei vielen Screenshots pro Persona (z. B. 30 WhatsApp-Bilder) hilft es, in
+  // Sub-Batches an die Vision-API zu schicken: GPT-4o haelt sich dann pro Call
+  // an weniger Material und uebersieht weniger Antworten. Die Teil-JSONs werden
+  // anschliessend gemerged: Profil-Felder per "first non-empty wins" (Profil
+  // sollte ueberall identisch sein), Antworten per Object.assign (jede Frage
+  // taucht idealerweise in genau einem Sub-Batch auf).
+  const SUB_CHUNK_SIZE = 10;
+  const tryParseVisionJson = (raw: string): { profil?: Record<string, string>; antworten?: Record<string, unknown> } => {
+    try {
+      const match = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      const jsonString = match ? match[1] : raw;
+      return JSON.parse(jsonString);
+    } catch {
+      return {};
+    }
+  };
+  const extractPersonaInChunks = async (images: string[]): Promise<string> => {
+    if (images.length <= SUB_CHUNK_SIZE) {
+      return extractFromImages(images, apiKey, fragebogen);
+    }
+    const subBatches: string[][] = [];
+    for (let i = 0; i < images.length; i += SUB_CHUNK_SIZE) {
+      subBatches.push(images.slice(i, i + SUB_CHUNK_SIZE));
+    }
+    const mergedProfile: Record<string, string> = {};
+    const mergedAnswers: Record<string, unknown> = {};
+    let firstError: Error | null = null;
+    for (const sub of subBatches) {
+      try {
+        const raw = await extractFromImages(sub, apiKey, fragebogen);
+        const parsed = tryParseVisionJson(raw);
+        if (parsed.profil) {
+          for (const [k, v] of Object.entries(parsed.profil)) {
+            if (v && !mergedProfile[k]) mergedProfile[k] = String(v);
+          }
+        }
+        if (parsed.antworten) {
+          Object.assign(mergedAnswers, parsed.antworten);
+        }
+      } catch (e) {
+        if (!firstError) firstError = e instanceof Error ? e : new Error(String(e));
+      }
+    }
+    // Wenn keine einzige Antwort durchkam, Fehler hochreichen statt leeres JSON.
+    if (Object.keys(mergedAnswers).length === 0 && Object.keys(mergedProfile).length === 0 && firstError) {
+      throw firstError;
+    }
+    return JSON.stringify({ profil: mergedProfile, antworten: mergedAnswers });
+  };
+
   // Liest die rohe Vision-Antwort und baut combo + canonical response auf.
   const parseDemoscopeExtraction = (raw: string): { combo: Record<string, string>, response: string } => {
     let extractedData: any = {};
@@ -528,7 +578,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
         results: prev.results.map((r, idx) => idx === i ? { ...r, status: 'loading' } : r)
       }));
       try {
-        const raw = await extractFromImages(chunks[i], apiKey, fragebogen);
+        const raw = await extractPersonaInChunks(chunks[i]);
         const { combo, response } = parseDemoscopeExtraction(raw);
         setDemoscope(prev => ({
           ...prev,
