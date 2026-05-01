@@ -1,11 +1,11 @@
 'use server';
 
-import { z } from 'zod';
 import { exec } from 'child_process';
 import util from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import type { ModelConfig } from './types';
 
 const execPromise = util.promisify(exec);
 
@@ -15,14 +15,6 @@ const execPromise = util.promisify(exec);
 // "Environment Variables" konfigurieren.
 const getOpenRouterKey = (override?: string) => override || process.env.OPENROUTER_API_KEY || '';
 const getPublicAiKey = () => process.env.PUBLICAI_API_KEY || '';
-
-export type ModelConfig = {
-    type: 'openrouter' | 'local' | 'publicai';
-    modelId: string;
-    temperature?: number;
-    top_p?: number;
-    max_tokens?: number;
-};
 
 export async function processPrompt(
     prompt: string,
