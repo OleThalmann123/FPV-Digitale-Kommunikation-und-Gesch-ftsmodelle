@@ -336,7 +336,12 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     groupLabels?: string[];     // Persona-Ordnernamen (z. B. "CEM-m-30-39-CH-1PkK-...")
   };
 
-  const [demoscope, setDemoscope] = useLocalStorage<DemoscopeUpload>('pp_demoscope_v1', {
+  // Bewusst useState statt useLocalStorage: 24 Personas x ~30 base64-Screenshots
+  // sprengen das ~5 MB Quota fuer localStorage. Die fehlgeschlagenen setItem-Calls
+  // brachen vorher die React-Hydration und liessen die Seite mit 500 antworten.
+  // Persistent muss hier nichts sein -- die Vision-Ergebnisse landen via offlineResults
+  // ohnehin im Dashboard und (kuenftig) in Supabase.
+  const [demoscope, setDemoscope] = useState<DemoscopeUpload>({
     images: [],
     pagesPerPersona: 1,
     modelName: 'Demoscope',
@@ -614,6 +619,9 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   useEffect(() => {
     setMounted(true);
     fetchHistory();
+    // Bereinigung: alte Versionen haben den Demoscope-State (inkl. base64-Bilder)
+    // in localStorage gespeichert und das Quota gesprengt. Einmalig wegputzen.
+    try { window.localStorage.removeItem('pp_demoscope_v1'); } catch {}
   }, []);
 
   if (!mounted) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading Platform...</div>;
