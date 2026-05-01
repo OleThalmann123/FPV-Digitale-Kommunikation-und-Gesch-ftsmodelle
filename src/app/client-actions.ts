@@ -40,7 +40,13 @@ Gib AUSSCHLIESSLICH ein valides JSON zurück in folgendem Format (ohne Markdown 
         ...base64Images.map(imgBase64 => ({
             type: "image_url",
             image_url: {
-                url: imgBase64
+                url: imgBase64,
+                // "low" presst jedes Bild auf 512x512 -> 85 Tokens statt ~3000.
+                // Kritisch bei Demoscope-Uploads mit ~30 Screenshots/Persona, wo
+                // "high" pro Persona ~90k Tokens verbrennt. Mobile-Screenshots
+                // sind in der Regel auch bei low noch lesbar; bei feinem Text
+                // ggf. auf "high" zurueckschalten.
+                detail: "low"
             }
         }))
     ];

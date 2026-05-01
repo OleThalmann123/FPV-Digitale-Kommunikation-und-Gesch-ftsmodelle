@@ -484,7 +484,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     return { combo, response: raw };
   };
 
-  const runDemoscopeExtraction = async () => {
+  const runDemoscopeExtraction = async (opts?: { limit?: number }) => {
     if (!apiKey) {
       alert('Bitte API Key (OpenRouter) in den Settings eintragen, um die Vision API (GPT-4o) zu nutzen.');
       return;
@@ -505,6 +505,11 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
         chunks.push(demoscope.images.slice(i, i + pp));
       }
       labels = chunks.map(() => undefined);
+    }
+    // Optionales Limit (z. B. "Nur 1 Persona testen") -- spart Vision-Kosten beim Probelauf.
+    if (opts?.limit && opts.limit > 0 && opts.limit < chunks.length) {
+      chunks = chunks.slice(0, opts.limit);
+      labels = labels.slice(0, opts.limit);
     }
     const ts = Date.now();
     const initialResults: DemoscopePersona[] = chunks.map((imgs, i) => ({
@@ -1787,9 +1792,21 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                           {isExtracting && <>Verarbeite {totalProgress + loadingN}/{totalToProcess} ({successN} ✓, {errorN} ✗, {loadingN + pendingN} offen)</>}
                           {demoscope.status === 'done' && <>Fertig: <span className="text-green-600 font-bold">{successN}</span> erfolgreich, <span className="text-red-600 font-bold">{errorN}</span> Fehler — bereits im Dashboard sichtbar.</>}
                         </div>
-                        <Button onClick={runDemoscopeExtraction} disabled={!hasImages || isExtracting || !apiKey} size="lg" className="gap-2">
-                          {isExtracting ? <>Extrahiere {totalProgress + 1}/{totalToProcess}...</> : <><FlaskConical className="w-4 h-4" /> Alle auswerten</>}
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={() => runDemoscopeExtraction({ limit: 1 })}
+                            disabled={!hasImages || isExtracting || !apiKey}
+                            size="lg"
+                            className="gap-2"
+                            title="Nur die erste Persona auswerten — sinnvoll als Kostentest, bevor alle 24 laufen."
+                          >
+                            <FlaskConical className="w-4 h-4" /> Nur 1 Persona testen
+                          </Button>
+                          <Button onClick={() => runDemoscopeExtraction()} disabled={!hasImages || isExtracting || !apiKey} size="lg" className="gap-2">
+                            {isExtracting ? <>Extrahiere {totalProgress + 1}/{totalToProcess}...</> : <><FlaskConical className="w-4 h-4" /> Alle auswerten</>}
+                          </Button>
+                        </div>
                       </div>
 
                       {!apiKey && (
