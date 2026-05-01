@@ -12,9 +12,19 @@ const execPromise = util.promisify(exec);
 // Server-seitige Defaults: Keys werden NIE in den Client geleakt. Client-seitig
 // uebergebene Override-Keys (apiKey-Parameter) gewinnen, sonst zieht der Server
 // den Key aus den env vars. Lokal in `.env.local`, in Produktion in Vercel
-// "Environment Variables" konfigurieren.
-const getOpenRouterKey = (override?: string) => override || process.env.OPENROUTER_API_KEY || '';
-const getPublicAiKey = () => process.env.PUBLICAI_API_KEY || '';
+// "Environment Variables" konfigurieren. Beide Schreibweisen (OPENROUTER_API_KEY
+// und OPEN_ROUTER_API_KEY) werden akzeptiert -- OpenRouter selbst schreibt sich
+// als ein Wort, in der Vercel-Console wurde aber teilweise mit Underscore
+// angelegt.
+const getOpenRouterKey = (override?: string) =>
+    override
+    || process.env.OPENROUTER_API_KEY
+    || process.env.OPEN_ROUTER_API_KEY
+    || '';
+const getPublicAiKey = () =>
+    process.env.PUBLICAI_API_KEY
+    || process.env.PUBLIC_AI_API_KEY
+    || '';
 
 export async function processPrompt(
     prompt: string,
