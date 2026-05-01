@@ -40,8 +40,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { processPrompt, ModelConfig } from './actions';
-import { extractFromImages } from './client-actions';
+import { processPrompt, ModelConfig, extractFromImages } from './actions';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { LayoutDashboard, FlaskConical, Download, Settings, Key, Info, History, Image as ImageIcon, Upload, Plus, Trash2, X, PlusCircle, Database } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -185,7 +184,9 @@ export default function PromptPlatform() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState<'generator' | 'dashboard' | 'settings' | 'historie' | 'manual'>('generator');
   const [dashboardRoleFilter, setDashboardRoleFilter] = useState<string>('Alle');
-  const [apiKey, setApiKey] = useLocalStorage('pp_apiKey', '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');
+  // Optional: client-seitiger Override des OpenRouter-Keys. Wenn leer, zieht
+  // der Server-Action-Pfad den Key aus process.env.OPENROUTER_API_KEY.
+  const [apiKey, setApiKey] = useLocalStorage('pp_apiKey', '');
   const [modelList, setModelList] = useLocalStorage('pp_modelList', 'publicai:swiss-ai/apertus-70b-instruct\nopenai/gpt-4o-mini');
   // Default-Temperatur 0.7 statt 0: bei T=0 picken die Modelle deterministisch das wahrscheinlichste
   // Token, wodurch synthetische Personas kaum Varianz zeigen. ~0.7 ist in der Literatur zur
@@ -541,11 +542,10 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   };
 
   const runDemoscopeExtraction = async (opts?: { limit?: number }) => {
-    if (!apiKey) {
-      alert('Bitte API Key (OpenRouter) in den Settings eintragen, um die Vision API (GPT-4o) zu nutzen.');
-      return;
-    }
     if (demoscope.images.length === 0) return;
+    // Hinweis: Wenn weder localStorage-apiKey noch OPENROUTER_API_KEY (env var)
+    // gesetzt ist, schlaegt die Server-Action mit einer klaren Fehlermeldung
+    // fehl -- die wandert automatisch in die Status-Tabelle pro Persona.
 
     // Ordner-Upload setzt imageGroups (1 Persona = 1 Ordner = 1 Vision-Call).
     // Flacher Upload faellt auf pagesPerPersona-Chunking zurueck.
@@ -709,12 +709,9 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       setIsGenerating(false); // Release lock if early exit
       return;
     }
-    // API key only strict required if openrouter or publicai is in models
-    if (models.find(m => m.type === 'openrouter' || m.type === 'publicai') && !apiKey) {
-      alert('Bitte API Key eingeben (für Cloud-Modelle).');
-      setIsGenerating(false); // Release lock if early exit
-      return;
-    }
+    // Hinweis: Bei fehlendem Client-Key faellt der Server auf process.env.OPENROUTER_API_KEY
+    // bzw. PUBLICAI_API_KEY zurueck. Wenn auch die env vars leer sind, wirft die Server-Action
+    // mit klarer Meldung.
 
     const combos = generateCombinations();
 
@@ -1260,21 +1257,21 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
               <Card className="max-w-3xl">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2"><Key className="w-5 h-5" /> Zugang & Provider</CardTitle>
-                  <CardDescription>Trage hier deinen OpenRouter oder Public AI API-Key ein. Die verwendeten Cloud-Modelle erfordern diesen Schlüssel.</CardDescription>
+                  <CardDescription>Optional: Browser-spezifischer Override fuer den OpenRouter-Key. Standard ist die server-seitige env var <span className="font-mono">OPENROUTER_API_KEY</span> (Vercel / .env.local).</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
                   <div className="space-y-4">
-                    <Label htmlFor="apiKey">Globaler API Key (OpenRouter / PublicAI)</Label>
+                    <Label htmlFor="apiKey">OpenRouter API Key (optional, lokaler Override)</Label>
                     <Input
                       id="apiKey"
                       type="password"
-                      placeholder="sk-or-v1-..."
+                      placeholder="leer lassen um OPENROUTER_API_KEY (env var) zu verwenden"
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                       className="font-mono text-lg py-5"
                     />
                     <p className="text-sm text-muted-foreground mt-2">
-                      Dieser API-Schlüssel wird für die Verwendung der OpenRouter Cloud Modelle herangezogen. Public AI Modelle werden (vorerst) von uns zur Verfügung gestellt. Du kannst die genauen Modelle für jeden Lauf im Generator-Tab auswählen.
+                      Das Feld liegt nur im <span className="font-mono">localStorage</span> deines Browsers. Wenn leer, zieht der Server den Key aus <span className="font-mono">process.env.OPENROUTER_API_KEY</span> — auf Vercel unter Project Settings → Environment Variables anlegen, lokal in <span className="font-mono">.env.local</span>. PublicAI: <span className="font-mono">PUBLICAI_API_KEY</span> (env var, kein Client-Override).
                     </p>
                   </div>
                 </CardContent>
@@ -1852,24 +1849,18 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                           <Button
                             variant="outline"
                             onClick={() => runDemoscopeExtraction({ limit: 1 })}
-                            disabled={!hasImages || isExtracting || !apiKey}
+                            disabled={!hasImages || isExtracting}
                             size="lg"
                             className="gap-2"
                             title="Nur die erste Persona auswerten — sinnvoll als Kostentest, bevor alle 24 laufen."
                           >
                             <FlaskConical className="w-4 h-4" /> Nur 1 Persona testen
                           </Button>
-                          <Button onClick={() => runDemoscopeExtraction()} disabled={!hasImages || isExtracting || !apiKey} size="lg" className="gap-2">
+                          <Button onClick={() => runDemoscopeExtraction()} disabled={!hasImages || isExtracting} size="lg" className="gap-2">
                             {isExtracting ? <>Extrahiere {totalProgress + 1}/{totalToProcess}...</> : <><FlaskConical className="w-4 h-4" /> Alle auswerten</>}
                           </Button>
                         </div>
                       </div>
-
-                      {!apiKey && (
-                        <div className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-md p-3">
-                          Hinweis: Es ist kein OpenRouter-API-Key konfiguriert. Bitte unter Settings eintragen — die Vision-Extraktion läuft über GPT-4o.
-                        </div>
-                      )}
 
                       {demoscope.results.length > 0 && (
                         <div className="space-y-3 pt-4">

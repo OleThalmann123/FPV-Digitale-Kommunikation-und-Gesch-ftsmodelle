@@ -9,6 +9,13 @@ import os from 'os';
 
 const execPromise = util.promisify(exec);
 
+// Server-seitige Defaults: Keys werden NIE in den Client geleakt. Client-seitig
+// uebergebene Override-Keys (apiKey-Parameter) gewinnen, sonst zieht der Server
+// den Key aus den env vars. Lokal in `.env.local`, in Produktion in Vercel
+// "Environment Variables" konfigurieren.
+const getOpenRouterKey = (override?: string) => override || process.env.OPENROUTER_API_KEY || '';
+const getPublicAiKey = () => process.env.PUBLICAI_API_KEY || '';
+
 export type ModelConfig = {
     type: 'openrouter' | 'local' | 'publicai';
     modelId: string;
@@ -31,14 +38,15 @@ export async function processPrompt(
     if (modelConfig.max_tokens !== undefined) commonPayload.max_tokens = modelConfig.max_tokens;
 
     if (modelConfig.type === 'openrouter') {
-        if (!apiKey) throw new Error("API Key required for OpenRouter");
+        const effectiveKey = getOpenRouterKey(apiKey);
+        if (!effectiveKey) throw new Error("Kein OpenRouter-API-Key gesetzt. Bitte OPENROUTER_API_KEY als env var konfigurieren oder in den Settings eintragen.");
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
 
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${apiKey}`,
+                'Authorization': `Bearer ${effectiveKey}`,
                 'Content-Type': 'application/json',
                 'HTTP-Referer': 'http://localhost:3000',
                 'X-Title': 'Meta Prompt Platform',
@@ -58,7 +66,8 @@ export async function processPrompt(
         const data = await response.json();
         return data.choices[0]?.message?.content || 'No response';
     } else if (modelConfig.type === 'publicai') {
-        const publicAiKey = 'zpka_a401f6eba2f440e3a7807bf9dafe7d20_1d367ff1';
+        const publicAiKey = getPublicAiKey();
+        if (!publicAiKey) throw new Error("Kein PublicAI-API-Key gesetzt. Bitte PUBLICAI_API_KEY als env var konfigurieren.");
         let response;
         let attempts = 0;
         const maxAttempts = 2;
@@ -154,11 +163,12 @@ export async function processPrompt(
 
 
 export async function fetchOpenRouterModels(apiKey?: string) {
-    if (!apiKey) return [];
+    const effectiveKey = getOpenRouterKey(apiKey);
+    if (!effectiveKey) return [];
     try {
         const response = await fetch('https://openrouter.ai/api/v1/models', {
             headers: {
-                'Authorization': `Bearer ${apiKey}`,
+                'Authorization': `Bearer ${effectiveKey}`,
             }
         });
         if (!response.ok) return [];
@@ -171,7 +181,8 @@ export async function fetchOpenRouterModels(apiKey?: string) {
 
 export async function fetchPublicAIModels() {
     try {
-        const publicAiKey = 'zpka_a401f6eba2f440e3a7807bf9dafe7d20_1d367ff1';
+        const publicAiKey = getPublicAiKey();
+        if (!publicAiKey) return [];
         const response = await fetch('https://api.publicai.co/v1/models', {
             headers: {
                 'Authorization': `Bearer ${publicAiKey}`,
@@ -183,5 +194,82 @@ export async function fetchPublicAIModels() {
     } catch {
         return [];
     }
+}
+
+// Demoscope Vision-Extraktion: laeuft jetzt server-seitig, damit der OpenRouter-
+// Key nie im Client-Bundle landet. Sub-Chunking (10 Bilder pro Call) bleibt im
+// Client (page.tsx), damit der Fortschritt pro Sub-Batch sichtbar bleibt und
+// jeder Server-Call deutlich unter dem 50mb-bodySizeLimit aus next.config.ts
+// liegt.
+export async function extractFromImages(
+    base64Images: string[],
+    apiKey?: string,
+    fragebogen?: string
+): Promise<string> {
+    const effectiveKey = getOpenRouterKey(apiKey);
+    if (!effectiveKey) throw new Error("Kein OpenRouter-API-Key gesetzt. Bitte OPENROUTER_API_KEY als env var konfigurieren oder in den Settings eintragen.");
+
+    const contentArray: any[] = [
+        {
+            type: "text",
+            text: `Bitte extrahiere die demografischen Profil-Variablen aus diesen Screenshots (falls vorhanden): Rolle, Geschlecht, Alter, Nationalitaet, Haushalt, Ausbildung, Berufserfahrung, Wohnsitzland, Postleitzahl, Avatar_Eigenschaften_und_Praeferenzen.
+Zudem extrahiere alle relevanten Umfrage-Antworten (dies können Text-Antworten, Zahlen, Likert-Skalen 1-7, etc. sein).
+
+WICHTIG: Auf den Screenshots sind die Fragen eventuell nicht direkt ersichtlich. Bitte werte die erkennbaren Antworten (z.B. Radiobuttons, Dropdowns, Checkboxen, offene Textfelder, Slider auf Skala 1-7) in der Reihenfolge ihres Auftretens aus.
+Falls ein Fragebogen als Kontext mitgeliefert wird, nutze diesen zwingend, um die Antworten den korrekten Fragen (z.B. F1, F2, F3 etc.) zuzuordnen. Nutze EXAKT die Bezeichnungen (F1, F2...) aus dem Fragebogen.
+${fragebogen ? `\nHIER IST DER FRAGEBOGEN ALS KONTEXT:\n---\n${fragebogen}\n---\n\nOrdne die Antworten chronologisch den Fragen in diesem Fragebogen zu (F1, F2, ...).` : ''}
+
+Gib AUSSCHLIESSLICH ein valides JSON zurück in folgendem Format (ohne Markdown Code Blocks):
+{
+  "profil": {
+    "Rolle": "Extrahierter Wert oder leer",
+    "Geschlecht": "Extrahierter Wert oder leer",
+    "Alter": "Extrahierter Wert oder leer",
+    "Nationalitaet": "Extrahierter Wert oder leer",
+    "Haushalt": "Extrahierter Wert oder leer",
+    "Ausbildung": "Extrahierter Wert oder leer",
+    "Berufserfahrung": "Extrahierter Wert oder leer",
+    "Wohnsitzland": "Extrahierter Wert oder leer",
+    "Postleitzahl": "Extrahierter Wert oder leer",
+    "Avatar_Eigenschaften_und_Praeferenzen": "Weiteres wie z.b. Beruf etc."
+  },
+  "antworten": {
+    "F1": "Beispiel Antwort Text",
+    "F2": "Technologie & Software",
+    "F3": 5,
+    "F4": "Hybrid"
+  }
+}`
+        },
+        ...base64Images.map(imgBase64 => ({
+            type: "image_url",
+            image_url: {
+                url: imgBase64,
+                detail: "high"
+            }
+        }))
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${effectiveKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'http://localhost:3000',
+            'X-Title': 'Meta Prompt Platform',
+        },
+        body: JSON.stringify({
+            model: 'openai/gpt-4o',
+            messages: [{ role: 'user', content: contentArray }],
+        }),
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`OpenRouter API error: ${response.status} ${errorBody}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '{}';
 }
 
