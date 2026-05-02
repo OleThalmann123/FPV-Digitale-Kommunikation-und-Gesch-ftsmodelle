@@ -520,6 +520,74 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     });
   };
 
+  // Eine einzelne Persona aus den Results UND aus dem Upload-State (imageGroups,
+  // groupLabels, groupCombos) entfernen. Damit kann man "kaputte" Personas
+  // ausmistern, ohne den ganzen Run neu starten zu muessen.
+  const handleDemoscopeDeletePersona = (id: string) => {
+    setDemoscope(prev => {
+      const idx = prev.results.findIndex(r => r.id === id);
+      if (idx < 0) return prev;
+      const newResults = prev.results.filter(r => r.id !== id);
+      // imageGroups/Labels/Combos sind parallel zu results indexiert -- den
+      // gleichen Index entfernen, dann flat images neu aufbauen.
+      let newGroups = prev.imageGroups;
+      let newLabels = prev.groupLabels;
+      let newCombos = prev.groupCombos;
+      let newImages = prev.images;
+      if (prev.imageGroups && idx < prev.imageGroups.length) {
+        newGroups = prev.imageGroups.filter((_, i) => i !== idx);
+        newLabels = prev.groupLabels?.filter((_, i) => i !== idx);
+        newCombos = prev.groupCombos?.filter((_, i) => i !== idx);
+        newImages = newGroups.flat();
+      }
+      return {
+        ...prev,
+        results: newResults,
+        images: newImages,
+        imageGroups: newGroups && newGroups.length > 0 ? newGroups : undefined,
+        groupLabels: newLabels && newLabels.length > 0 ? newLabels : undefined,
+        groupCombos: newCombos && newCombos.length > 0 ? newCombos : undefined,
+      };
+    });
+  };
+
+  // Vision-Extraktion fuer eine einzelne Persona neu starten -- gleiche Bilder,
+  // gleiche (Folder-)combo, neuer Vision-Call. Ueberschreibt das alte Ergebnis.
+  // Combo bleibt erhalten, falls sie aus dem Folder-Parser kommt.
+  const handleDemoscopeRerunPersona = async (id: string) => {
+    const target = demoscope.results.find(r => r.id === id);
+    if (!target) return;
+    if (target.status === 'loading') return;
+    setDemoscope(prev => ({
+      ...prev,
+      status: 'extracting',
+      results: prev.results.map(r => r.id === id ? { ...r, status: 'loading', error: undefined } : r),
+    }));
+    try {
+      const raw = await extractPersonaInChunks(target.images);
+      const { combo: visionCombo, response } = parseDemoscopeExtraction(raw);
+      setDemoscope(prev => {
+        // Wenn die alte combo bereits aus dem Folder-Parser kam (Rolle gesetzt
+        // und nicht "Erkenne..."), bleibt sie erhalten. Sonst Vision-combo.
+        const oldCombo = prev.results.find(r => r.id === id)?.combo;
+        const folderDerived = oldCombo && oldCombo.Rolle && !oldCombo.Rolle.startsWith('Erkenne') && oldCombo.Rolle !== 'Unbekannt';
+        const finalCombo = folderDerived ? oldCombo! : visionCombo;
+        return {
+          ...prev,
+          status: 'done',
+          results: prev.results.map(r => r.id === id ? { ...r, status: 'success', combo: finalCombo, response, error: undefined } : r),
+        };
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Vision API Fehler';
+      setDemoscope(prev => ({
+        ...prev,
+        status: 'done',
+        results: prev.results.map(r => r.id === id ? { ...r, status: 'error', error: msg } : r),
+      }));
+    }
+  };
+
   const handleDemoscopePagesChange = (n: number) => {
     setDemoscope(prev => ({ ...prev, pagesPerPersona: Math.max(1, n), status: 'idle', results: [] }));
   };
@@ -2006,12 +2074,14 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                                   <TableHead className="w-[200px] font-semibold">Erkannte Rolle</TableHead>
                                   <TableHead className="font-semibold">Profil-Highlights</TableHead>
                                   <TableHead className="w-[100px] text-center font-semibold">Antworten</TableHead>
+                                  <TableHead className="w-[140px] text-center font-semibold">Aktionen</TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {demoscope.results.map((r, idx) => {
                                   const answersN = r.status === 'success' ? Object.keys(parseAnswers(r.response)).length : 0;
                                   const profileChips = Object.entries(r.combo).filter(([k, v]) => k !== 'Rolle' && v).slice(0, 4);
+                                  const isBusy = r.status === 'loading' || r.status === 'pending';
                                   return (
                                     <TableRow key={r.id}>
                                       <TableCell className="text-center font-mono text-muted-foreground">{idx + 1}</TableCell>
@@ -2035,6 +2105,34 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                                       </TableCell>
                                       <TableCell className="text-center tabular-nums text-muted-foreground">
                                         {answersN > 0 ? answersN : '—'}
+                                      </TableCell>
+                                      <TableCell>
+                                        <div className="flex items-center justify-center gap-1">
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-7 px-2"
+                                            onClick={() => handleDemoscopeRerunPersona(r.id)}
+                                            disabled={isExtracting || isBusy}
+                                            title="Diese Persona neu auswerten (gleiche Bilder, neuer Vision-Call)"
+                                          >
+                                            <FlaskConical className="w-3 h-3" />
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-7 px-2 text-destructive hover:text-destructive"
+                                            onClick={() => {
+                                              if (confirm(`Persona ${idx + 1} (${r.combo.Rolle || 'Unbekannt'}) wirklich löschen? Bilder, Combo und Result werden entfernt.`)) {
+                                                handleDemoscopeDeletePersona(r.id);
+                                              }
+                                            }}
+                                            disabled={isExtracting || isBusy}
+                                            title="Diese Persona aus Results und Upload entfernen"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                          </Button>
+                                        </div>
                                       </TableCell>
                                     </TableRow>
                                   );
