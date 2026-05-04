@@ -1064,6 +1064,39 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     setActiveTab('dashboard');
   };
 
+  // Hängt einen gespeicherten Lauf an die bestehenden results[] an, ohne MetaPrompt /
+  // Fragebogen / RoleVariables zu überschreiben. Damit kann z.B. ein gespeicherter
+  // Demoscope-Datensatz mit einem laufenden LLM-Run gemerged und gemeinsam in Excel
+  // ausgewertet werden. Kollisionsfreie IDs via Prefix `hist-{runId}-{rowId}`.
+  const appendHistoricRun = async (runId: number) => {
+    const { data: resultsData, error } = await supabase
+      .from('prompt_run_results')
+      .select('*')
+      .eq('run_id', runId);
+
+    if (error) {
+      alert(`Fehler beim Laden des Laufs aus Supabase: ${error.message}`);
+      return;
+    }
+    if (!resultsData || resultsData.length === 0) {
+      alert('Dieser Lauf enthält keine Ergebnisse.');
+      return;
+    }
+
+    const appended = resultsData.map((dbRes: any) => ({
+      id: `hist-${runId}-${dbRes.id}`,
+      promptSent: dbRes.prompt_sent,
+      response: dbRes.response,
+      status: dbRes.status as 'pending' | 'loading' | 'success' | 'error',
+      combo: dbRes.combo || {},
+      modelId: dbRes.model_id,
+      modelConfig: { type: 'openrouter' as const, modelId: dbRes.model_id }
+    }));
+
+    setResults(prev => [...prev, ...appended]);
+    setActiveTab('dashboard');
+  };
+
   const currentModelsCount = getModelsToRun().length;
   const comboCount = generateCombinations().length;
 
@@ -1886,12 +1919,20 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                           )}
                         </div>
                       </CardContent>
-                      <CardFooter>
+                      <CardFooter className="flex gap-2 flex-wrap">
                         <Button
                           onClick={() => loadHistoricRun(run.id)}
                           disabled={isGenerating}
                         >
                           Diesen Lauf für Auswertung laden
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => appendHistoricRun(run.id)}
+                          disabled={isGenerating}
+                          title="Hängt diesen gespeicherten Lauf an die aktuellen Ergebnisse an, ohne sie zu überschreiben. Ideal um einen Demoscope-Datensatz mit einem LLM-Lauf zu mergen."
+                        >
+                          Zu aktuellem Lauf hinzufügen
                         </Button>
                       </CardFooter>
                     </Card>
