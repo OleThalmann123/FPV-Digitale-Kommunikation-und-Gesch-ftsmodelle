@@ -6,6 +6,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import type { ModelConfig } from './types';
+import { buildVisionPrompt } from '@/lib/visionPrompt';
 
 const execPromise = util.promisify(exec);
 
@@ -214,34 +215,7 @@ export async function extractFromImages(
     const contentArray: any[] = [
         {
             type: "text",
-            text: `Bitte extrahiere die demografischen Profil-Variablen aus diesen Screenshots (falls vorhanden): Rolle, Geschlecht, Alter, Nationalitaet, Haushalt, Ausbildung, Berufserfahrung, Wohnsitzland, Postleitzahl, Avatar_Eigenschaften_und_Praeferenzen.
-Zudem extrahiere alle relevanten Umfrage-Antworten (dies können Text-Antworten, Zahlen, Likert-Skalen 1-7, etc. sein).
-
-WICHTIG: Auf den Screenshots sind die Fragen eventuell nicht direkt ersichtlich. Bitte werte die erkennbaren Antworten (z.B. Radiobuttons, Dropdowns, Checkboxen, offene Textfelder, Slider auf Skala 1-7) in der Reihenfolge ihres Auftretens aus.
-Falls ein Fragebogen als Kontext mitgeliefert wird, nutze diesen zwingend, um die Antworten den korrekten Fragen (z.B. F1, F2, F3 etc.) zuzuordnen. Nutze EXAKT die Bezeichnungen (F1, F2...) aus dem Fragebogen.
-${fragebogen ? `\nHIER IST DER FRAGEBOGEN ALS KONTEXT:\n---\n${fragebogen}\n---\n\nOrdne die Antworten chronologisch den Fragen in diesem Fragebogen zu (F1, F2, ...).` : ''}
-
-Gib AUSSCHLIESSLICH ein valides JSON zurück in folgendem Format (ohne Markdown Code Blocks):
-{
-  "profil": {
-    "Rolle": "Extrahierter Wert oder leer",
-    "Geschlecht": "Extrahierter Wert oder leer",
-    "Alter": "Extrahierter Wert oder leer",
-    "Nationalitaet": "Extrahierter Wert oder leer",
-    "Haushalt": "Extrahierter Wert oder leer",
-    "Ausbildung": "Extrahierter Wert oder leer",
-    "Berufserfahrung": "Extrahierter Wert oder leer",
-    "Wohnsitzland": "Extrahierter Wert oder leer",
-    "Postleitzahl": "Extrahierter Wert oder leer",
-    "Avatar_Eigenschaften_und_Praeferenzen": "Weiteres wie z.b. Beruf etc."
-  },
-  "antworten": {
-    "F1": "Beispiel Antwort Text",
-    "F2": "Technologie & Software",
-    "F3": 5,
-    "F4": "Hybrid"
-  }
-}`
+            text: buildVisionPrompt(fragebogen)
         },
         ...base64Images.map(imgBase64 => ({
             type: "image_url",

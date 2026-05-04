@@ -42,6 +42,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { processPrompt, extractFromImages } from './actions';
 import type { ModelConfig } from './types';
+import { buildVisionPrompt } from '@/lib/visionPrompt';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { LayoutDashboard, FlaskConical, Download, Settings, Key, Info, History, Image as ImageIcon, Upload, Plus, Trash2, X, PlusCircle, Database } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -391,6 +392,8 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     results: []
   });
   const [includeOfflineData, setIncludeOfflineData] = useLocalStorage('pp_include_offline_data', true);
+  const [demoscopeSaveStatus, setDemoscopeSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [demoscopeSaveError, setDemoscopeSaveError] = useState<string | null>(null);
 
   // ==================== Demoscope-Upload: smartes Stapel-Extraktion ====================
 
@@ -745,6 +748,60 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
     setDemoscope(prev => ({ ...prev, status: 'done' }));
   };
 
+  // Persistiert die aktuelle Demoscope-Extraktion in Supabase. Reuse der bestehenden
+  // prompt_runs / prompt_run_results Tabellen -- der Lauf taucht damit automatisch
+  // in der Historie auf und kann via loadHistoricRun zurueckgeladen werden.
+  // Bilder (base64) werden NICHT persistiert -- zu gross fuers DB-Quota und nicht
+  // wieder benoetigt, sobald die Extraktion abgeschlossen ist.
+  const saveDemoscopeToSupabase = async () => {
+    const persistable = demoscope.results.filter(r => r.status === 'success' || r.status === 'error');
+    if (persistable.length === 0) {
+      setDemoscopeSaveError('Keine extrahierten Personas zum Speichern vorhanden.');
+      setDemoscopeSaveStatus('error');
+      return;
+    }
+    setDemoscopeSaveStatus('saving');
+    setDemoscopeSaveError(null);
+    const promptText = buildVisionPrompt(fragebogen);
+    try {
+      const { data: runData, error: runError } = await supabase
+        .from('prompt_runs')
+        .insert({
+          name: `Demoscope-Lauf vom ${new Date().toLocaleString('de-CH')}`,
+          meta_prompt_template: 'Demoscope Vision Extraction (image upload)',
+          fragebogen: fragebogen,
+          role_variables: {},
+          active_roles: [],
+          models: [demoscope.modelName || 'Demoscope']
+        })
+        .select('id')
+        .single();
+      if (runError) throw runError;
+      if (!runData) throw new Error('Supabase hat keine run_id zurückgegeben.');
+      const runId = runData.id;
+
+      const rows = persistable.map(r => ({
+        run_id: runId,
+        model_id: demoscope.modelName || 'Demoscope',
+        combo: r.combo,
+        prompt_sent: `${promptText}\n\n[Bilder: ${r.images.length} Screenshot${r.images.length === 1 ? '' : 's'} -- base64 nicht in Excel/DB persistiert]`,
+        response: r.status === 'success' ? r.response : (r.error || 'Vision-Extraktion fehlgeschlagen'),
+        status: r.status,
+      }));
+      const { error: resultsError } = await supabase
+        .from('prompt_run_results')
+        .insert(rows);
+      if (resultsError) throw resultsError;
+
+      setDemoscopeSaveStatus('saved');
+      fetchHistory();
+      setTimeout(() => setDemoscopeSaveStatus('idle'), 4000);
+    } catch (err: any) {
+      console.error('Demoscope-Save fehlgeschlagen:', err);
+      setDemoscopeSaveError(err?.message || 'Unbekannter Supabase-Fehler');
+      setDemoscopeSaveStatus('error');
+    }
+  };
 
   const fetchHistory = async () => {
     const { data } = await supabase
@@ -1013,11 +1070,14 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   // Demoscope-Extraktionen werden hier zu virtuellen Run-Ergebnissen mit modelId = demoscope.modelName.
   // Damit landen sie automatisch in combinedResults und damit in Dashboard, Aggregat, Excel-Sheets,
   // Erfolgsquoten-Karte etc. -- gleiche Auswertung wie Apertus / gpt-4o-mini.
+  // Echter Vision-Prompt-Text (ohne Bild-base64) landet so im Excel und in
+  // Supabase -- damit ist der Run wissenschaftlich reproduzierbar.
+  const visionPromptText = buildVisionPrompt(fragebogen);
   const offlineResults: any[] = (demoscope.results || [])
     .filter(r => r.status === 'success' || r.status === 'error')
     .map(r => ({
       id: r.id,
-      promptSent: `Demoscope-Upload (Vision OCR, ${r.images.length} Screenshot${r.images.length === 1 ? '' : 's'})`,
+      promptSent: `${visionPromptText}\n\n[Bilder: ${r.images.length} Screenshot${r.images.length === 1 ? '' : 's'} -- base64 nicht in Excel/DB persistiert]`,
       response: r.status === 'success' ? r.response : (r.error || 'Vision-Extraktion fehlgeschlagen'),
       status: r.status,
       combo: r.combo,
@@ -2059,7 +2119,27 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                           <Button onClick={() => runDemoscopeExtraction()} disabled={!hasImages || isExtracting} size="lg" className="gap-2">
                             {isExtracting ? <>Extrahiere {totalProgress + 1}/{totalToProcess}...</> : <><FlaskConical className="w-4 h-4" /> Alle auswerten</>}
                           </Button>
+                          <Button
+                            onClick={saveDemoscopeToSupabase}
+                            disabled={
+                              isExtracting ||
+                              demoscopeSaveStatus === 'saving' ||
+                              demoscope.results.filter(r => r.status === 'success' || r.status === 'error').length === 0
+                            }
+                            size="lg"
+                            variant={demoscopeSaveStatus === 'saved' ? 'default' : 'outline'}
+                            className="gap-2"
+                            title="Speichert die aktuelle Demoscope-Extraktion (Profil + Antworten + Vision-Prompt) in Supabase. Bilder werden NICHT mitgespeichert."
+                          >
+                            <Database className="w-4 h-4" />
+                            {demoscopeSaveStatus === 'saving' && 'Speichere...'}
+                            {demoscopeSaveStatus === 'saved' && 'In Supabase gespeichert'}
+                            {(demoscopeSaveStatus === 'idle' || demoscopeSaveStatus === 'error') && 'In Supabase speichern'}
+                          </Button>
                         </div>
+                        {demoscopeSaveStatus === 'error' && demoscopeSaveError && (
+                          <p className="text-sm text-destructive mt-2">Speichern fehlgeschlagen: {demoscopeSaveError}</p>
+                        )}
                       </div>
 
                       {demoscope.results.length > 0 && (
