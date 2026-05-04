@@ -217,23 +217,31 @@ export async function extractFromImages(
             text: `Bitte extrahiere die demografischen Profil-Variablen aus diesen Screenshots (falls vorhanden): Rolle, Geschlecht, Alter, Nationalitaet, Haushalt, Ausbildung, Berufserfahrung, Wohnsitzland, Postleitzahl, Avatar_Eigenschaften_und_Praeferenzen.
 Zudem extrahiere alle relevanten Umfrage-Antworten (dies können Text-Antworten, Zahlen, Likert-Skalen 1-7, etc. sein).
 
-WICHTIG: Auf den Screenshots sind die Fragen eventuell nicht direkt ersichtlich. Bitte werte die erkennbaren Antworten (z.B. Radiobuttons, Dropdowns, Checkboxen, offene Textfelder, Slider auf Skala 1-7) in der Reihenfolge ihres Auftretens aus.
+WICHTIG -- ÜBERLAPPENDE SCREENSHOTS:
+Die Screenshots stammen aus einem gescrollten Chat-Verlauf. Aufeinanderfolgende Bilder überlappen sich vertikal (das untere Drittel von Bild N entspricht dem oberen Drittel von Bild N+1). Dieselbe Frage und dieselbe Antwort kann daher auf zwei aufeinanderfolgenden Bildern sichtbar sein.
+- Behandle den gesamten Bilder-Stapel als EINEN durchgehenden Chat-Verlauf.
+- Extrahiere jede Frage-Antwort-Kombination GENAU EINMAL, auch wenn sie auf mehreren Bildern erscheint.
+- Jeder F-Schlüssel (F1, F2, ...) und jeder Q-Schlüssel darf im Output-JSON nur EINMAL vorkommen.
+
+WICHTIG -- ANTWORT-ZUORDNUNG:
+Bitte werte die erkennbaren Antworten (z.B. Radiobuttons, Dropdowns, Checkboxen, offene Textfelder, Slider auf Skala 1-7) in der Reihenfolge ihres Auftretens aus.
 Falls ein Fragebogen als Kontext mitgeliefert wird, nutze diesen zwingend, um die Antworten den korrekten Fragen (z.B. F1, F2, F3 etc.) zuzuordnen. Nutze EXAKT die Bezeichnungen (F1, F2...) aus dem Fragebogen.
 ${fragebogen ? `\nHIER IST DER FRAGEBOGEN ALS KONTEXT:\n---\n${fragebogen}\n---\n\nOrdne die Antworten chronologisch den Fragen in diesem Fragebogen zu (F1, F2, ...).` : ''}
 
-Gib AUSSCHLIESSLICH ein valides JSON zurück in folgendem Format (ohne Markdown Code Blocks):
+OUTPUT-FORMAT (verbindlich):
+Gib AUSSCHLIESSLICH ein valides JSON zurück (ohne Markdown Code Blocks, ohne Kommentar, ohne Prefix). Genau diese Struktur, genau diese Keys:
 {
   "profil": {
-    "Rolle": "Extrahierter Wert oder leer",
-    "Geschlecht": "Extrahierter Wert oder leer",
-    "Alter": "Extrahierter Wert oder leer",
-    "Nationalitaet": "Extrahierter Wert oder leer",
-    "Haushalt": "Extrahierter Wert oder leer",
-    "Ausbildung": "Extrahierter Wert oder leer",
-    "Berufserfahrung": "Extrahierter Wert oder leer",
-    "Wohnsitzland": "Extrahierter Wert oder leer",
-    "Postleitzahl": "Extrahierter Wert oder leer",
-    "Avatar_Eigenschaften_und_Praeferenzen": "Weiteres wie z.b. Beruf etc."
+    "Rolle": "Extrahierter Wert oder leerer String",
+    "Geschlecht": "Extrahierter Wert oder leerer String",
+    "Alter": "Extrahierter Wert oder leerer String",
+    "Nationalitaet": "Extrahierter Wert oder leerer String",
+    "Haushalt": "Extrahierter Wert oder leerer String",
+    "Ausbildung": "Extrahierter Wert oder leerer String",
+    "Berufserfahrung": "Extrahierter Wert oder leerer String",
+    "Wohnsitzland": "Extrahierter Wert oder leerer String",
+    "Postleitzahl": "Extrahierter Wert oder leerer String",
+    "Avatar_Eigenschaften_und_Praeferenzen": "Weiteres wie z.B. Beruf etc."
   },
   "antworten": {
     "F1": "Beispiel Antwort Text",
@@ -241,7 +249,15 @@ Gib AUSSCHLIESSLICH ein valides JSON zurück in folgendem Format (ohne Markdown 
     "F3": 5,
     "F4": "Hybrid"
   }
-}`
+}
+
+Regeln für das JSON:
+- Die 10 Profil-Keys sind FIX (genau diese Schreibweise, auch wenn ein Wert leer ist -> dann leerer String "").
+- Die antworten-Keys sind dynamisch (F1, F2, ..., Q1, Q2, ...) und folgen der Numerierung im Fragebogen.
+- Likert-Antworten (1-7) als Zahl ausgeben, NICHT als String.
+- Mehrfachauswahl als kommaseparierter String (z.B. "1, 3, 5").
+- Freitext-Antworten als String.
+- Wenn eine Frage im Bild-Stapel nicht auftaucht: Key weglassen (NICHT mit leerem Wert eintragen).`
         },
         ...base64Images.map(imgBase64 => ({
             type: "image_url",
