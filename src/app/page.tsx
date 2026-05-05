@@ -350,7 +350,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   };
 
   // Persona-Splitter: 6 Rollen x 2 Geschlechter x 1 Alter-Range x 1 Erfahrungs-Range
-  // x 2 Ausbildung (Bachelor, Master) x 2 Haushalt x 1 PLZ = 48 Personas pro Run.
+  // x 1 Ausbildung (Master) x 2 Haushalt x 1 PLZ = 24 Personas pro Run.
   // Alter & Erfahrung als zusammenhängende Range-Strings -> bei T=0.7 wählt das Modell intern
   // pro Run einen plausiblen Wert, das gibt zusätzliche Varianz ohne die Combos zu erhöhen.
   // Haushalt-Splitter (Single vs. Familie) macht Familien-Bias bei H5 (Saturday/Zeit) sichtbar.
@@ -371,7 +371,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       Alter: '30-39 Jahre',
       Nationalitaet: 'Schweiz',
       Haushalt: '1 Person kein Kind, 2 Personen 1 Kind',
-      Ausbildung: 'Bachelor, Master',
+      Ausbildung: 'Master',
       Berufserfahrung: roleWorkExperience[role] || '3-5 Jahre',
       Wohnsitzland: 'Schweiz',
       Postleitzahl: '9000',
@@ -381,7 +381,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v28', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v29', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
