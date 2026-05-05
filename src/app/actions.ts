@@ -73,13 +73,16 @@ export async function processPrompt(
         if (!publicAiKey) throw new Error("Kein PublicAI-API-Key gesetzt. Bitte PUBLICAI_API_KEY als env var konfigurieren.");
         let response;
         let attempts = 0;
-        const maxAttempts = 2;
+        const maxAttempts = 3;
         let lastError = null;
 
         while (attempts < maxAttempts) {
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 second timeout
+                // Apertus-70B antwortet auf laengeren Personas / Fragebogen-Prompts
+                // regelmaessig erst nach >90s. 240s gibt Spielraum, ohne den
+                // Vercel-Function-Timeout (Pro: 300s) zu sprengen.
+                const timeoutId = setTimeout(() => controller.abort(), 240000);
 
                 response = await fetch('https://api.publicai.co/v1/chat/completions', {
                     method: 'POST',
