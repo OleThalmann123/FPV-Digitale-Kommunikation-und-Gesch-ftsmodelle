@@ -203,6 +203,40 @@ const FOLDER_EDUCATION_MAP: Record<string, string> = {
   M: 'Master',
   B: 'Bachelor',
 };
+
+// USD-Preise pro 1M Tokens. Quelle: OpenRouter / PublicAI Modell-Karten.
+// Stand wenn ein Modell hier nicht gelistet ist, fällt der Schätzer auf null
+// zurück und das UI zeigt "Preis unbekannt" statt einer ausgedachten Zahl.
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  'anthropic/claude-opus-4.6': { input: 5, output: 25 },
+  'openai/gpt-4o': { input: 2.5, output: 10 },
+  'openai/gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'swiss-ai/apertus-70b-instruct': { input: 0, output: 0 },
+  'swiss-ai/apertus-8b-instruct': { input: 0, output: 0 },
+};
+
+// Heuristik fuer Kostenschaetzung pro Prompt. Realer Run kann variieren --
+// Fragebogen + Persona-Profil + Antwort-JSON liegen typischerweise in dieser
+// Groessenordnung. Fuer eine grobe Vorschau reicht das.
+const ESTIMATED_INPUT_TOKENS_PER_PROMPT = 500;
+const ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 800;
+
+function getModelPricing(modelId: string): { input: number; output: number } | null {
+  return MODEL_PRICING[modelId] || null;
+}
+
+function estimateRunCostUSD(models: ModelConfig[], promptsPerModel: number): { total: number; hasUnknown: boolean } {
+  let total = 0;
+  let hasUnknown = false;
+  models.forEach(m => {
+    const price = getModelPricing(m.modelId);
+    if (!price) { hasUnknown = true; return; }
+    const inCost = (ESTIMATED_INPUT_TOKENS_PER_PROMPT * promptsPerModel * price.input) / 1_000_000;
+    const outCost = (ESTIMATED_OUTPUT_TOKENS_PER_PROMPT * promptsPerModel * price.output) / 1_000_000;
+    total += inCost + outCost;
+  });
+  return { total, hasUnknown };
+}
 function parseFolderName(name: string): Record<string, string> | null {
   const parts = name.split('-');
   if (parts.length !== 10) return null;
@@ -1765,6 +1799,29 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                                 <Input type="number" step="1" value={model.max_tokens ?? ''} onChange={(e) => updateModelConfig(idx, 'max_tokens', parseInt(e.target.value))} />
                               </div>
                             </div>
+                            {(() => {
+                              const price = getModelPricing(model.modelId);
+                              if (!price) {
+                                return (
+                                  <div className="text-xs text-muted-foreground italic border-t pt-3">Preis unbekannt — Modell nicht in der lokalen Pricing-Tabelle.</div>
+                                );
+                              }
+                              if (price.input === 0 && price.output === 0) {
+                                return (
+                                  <div className="text-xs text-emerald-700 dark:text-emerald-400 border-t pt-3 flex items-center gap-2">
+                                    <Badge variant="outline" className="text-[10px]">kostenlos</Badge>
+                                    <span>Keine Token-Kosten (PublicAI / lokal).</span>
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div className="text-xs text-muted-foreground border-t pt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+                                  <span className="font-semibold uppercase text-[10px] tracking-wide">Preis pro 1M Tokens</span>
+                                  <Badge variant="outline" className="font-mono">${price.input} input</Badge>
+                                  <Badge variant="outline" className="font-mono">${price.output} output</Badge>
+                                </div>
+                              );
+                            })()}
                           </CardContent>
                         </Card>
                       ))}
@@ -1791,6 +1848,23 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                         <div className="text-lg text-primary font-medium flex items-center justify-center gap-4 bg-background px-6 py-4 rounded-xl shadow-sm border">
                           <span className="text-3xl font-bold">{comboCount}</span> Kombinationen <span className="opacity-50">×</span> <span className="text-3xl font-bold">{currentModelsCount}</span> Modelle <span className="opacity-50">=</span> <span className="text-3xl font-bold underline decoration-primary/30 tracking-tight">{comboCount * currentModelsCount}</span> Prompts
                         </div>
+
+                        {(() => {
+                          const cost = estimateRunCostUSD(getModelsToRun(), comboCount);
+                          if (comboCount === 0 || currentModelsCount === 0) return null;
+                          return (
+                            <div className="text-sm text-muted-foreground bg-background px-5 py-3 rounded-lg border flex items-center gap-3">
+                              <Badge variant="outline" className="font-mono text-base">≈ ${cost.total.toFixed(2)}</Badge>
+                              <span>
+                                Geschätzte Kosten für diesen Run
+                                {cost.hasUnknown && <span className="italic"> (ohne Modelle ohne Pricing-Daten)</span>}
+                              </span>
+                              <span className="text-xs italic opacity-70">
+                                Annahme: ~{ESTIMATED_INPUT_TOKENS_PER_PROMPT} input / ~{ESTIMATED_OUTPUT_TOKENS_PER_PROMPT} output Tokens pro Prompt
+                              </span>
+                            </div>
+                          );
+                        })()}
 
                         <Button
                           onClick={handleRunAndSwitch}
