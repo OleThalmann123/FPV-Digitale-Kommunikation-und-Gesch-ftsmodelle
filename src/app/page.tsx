@@ -229,13 +229,13 @@ export default function PromptPlatform() {
   // Optional: client-seitiger Override des OpenRouter-Keys. Wenn leer, zieht
   // der Server-Action-Pfad den Key aus process.env.OPENROUTER_API_KEY.
   const [apiKey, setApiKey] = useLocalStorage('pp_apiKey', '');
-  const [modelList, setModelList] = useLocalStorage('pp_modelList', 'publicai:swiss-ai/apertus-70b-instruct\nopenai/gpt-4o-mini');
+  const [modelList, setModelList] = useLocalStorage('pp_modelList', 'publicai:swiss-ai/apertus-70b-instruct\nanthropic/claude-opus-4.6');
   // Default-Temperatur 0.7 statt 0: bei T=0 picken die Modelle deterministisch das wahrscheinlichste
   // Token, wodurch synthetische Personas kaum Varianz zeigen. ~0.7 ist in der Literatur zur
   // synthetischen Persona-/Survey-Simulation der gängige Startwert (Begründung & Zitate -> Submission-Doku).
   const [configuredModels, setConfiguredModels] = useLocalStorage<ModelConfig[]>('pp_configured_models_v4', [
     { type: 'publicai', modelId: 'swiss-ai/apertus-70b-instruct', temperature: 0.7, top_p: 1, max_tokens: 8192 },
-    { type: 'openrouter', modelId: 'openai/gpt-4o-mini', temperature: 0.7, top_p: 1, max_tokens: 8192 }
+    { type: 'openrouter', modelId: 'anthropic/claude-opus-4.6', temperature: 0.7, top_p: 1, max_tokens: 8192 }
   ]);
   const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v12', '# Persona\n\nDu verkörperst ab jetzt vollständig eine reale Person mit folgendem Profil. Du denkst, fühlst und antwortest ausschliesslich aus ihrer Perspektive – nicht als KI, nicht als Assistent.\n\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Weitere Eigenschaften: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\n---\n\n# Denkschritt (intern, vor jeder Antwort)\n\nBevor du den Fragebogen ausfüllst, vergegenwärtige dir kurz:\n- Welche konkreten Erfahrungen hat diese Person in ihrer Rolle gemacht?\n- Was sind ihre grössten Motivationen – und was ihre grössten Bedenken?\n- Wie steht sie zu Zeit, Karriere, Praxisbezug und Reputation?\n\nNutze diese Überlegungen als Grundlage für jede einzelne Antwort.\n\n---\n\n# Anweisungen zur Fragebogenbearbeitung\n\nBearbeite jeden Fragetyp wie folgt:\n\n- **Likert-Skala (1–7):** Gib eine Ganzzahl zwischen 1 und 7 als "antwort" an.\n- **Einfachauswahl (Single-Choice):** Gib den exakten Wortlaut einer der vorgegebenen Optionen als String in "antwort" zurück.\n- **Mehrfachauswahl:** Gib ein JSON-Array mit den gewählten Optionen zurück (z. B. ["Renommee / Prestige", "Praxisnähe"]).\n- **Ranking (z. B. F9):** Gib ein JSON-Array von Objekten in der Reihenfolge der Wichtigkeit zurück, jedes Objekt mit "rang" (1 = am wichtigsten) und "kategorie" (exakter Wortlaut). Es müssen ALLE 6 Kategorien gerankt werden.\n- **Aufmerksamkeitscheck (z. B. F7):** Gib exakt den geforderten Wert zurück.\n- **Offene Fragen (Q1, Q2, Q3):** Antworte als Freitext-String mit 1–3 Sätzen aus der Persona-Perspektive.\n\nZu jeder Antwort gibst du eine kurze Begründung aus der Perspektive der Persona.\n\n---\n\n# Ausgabeformat\n\nAntworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown, kein ```json-Block.\n\n{\n  "persona_reflexion": "2–3 Sätze: Wie denkt diese Person über das Thema? Was treibt sie an, was bremst sie?",\n  "bewertungen": [\n    { "frage": 1, "antwort": 5, "begruendung": "Kurze Begründung." },\n    { "frage": 3, "antwort": ["Renommee / Prestige", "Praxisnähe"], "begruendung": "..." },\n    { "frage": 9, "antwort": [ {"rang": 1, "kategorie": "AI-Tools (z. B. ChatGPT, Midjourney)"}, {"rang": 2, "kategorie": "Analytics & Data (z. B. GA4, Tableau)"}, {"rang": 3, "kategorie": "Marketing-Automation (z. B. HubSpot, Salesforce)"}, {"rang": 4, "kategorie": "Content & Social Media Tools"}, {"rang": 5, "kategorie": "SEO / Performance Marketing Tools"}, {"rang": 6, "kategorie": "Collaboration & Productivity Tools"} ], "begruendung": "..." },\n    { "frage": "Q1", "antwort": "Mir fehlen vor allem Themen wie ...", "begruendung": "..." }\n  ]\n}\n\n---\n\n# Fragebogen\n\n{{Fragebogen}}\n\n---\n\nDeine JSON-Antwort:');
   const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen_v6', `SEKTION A - Reputation & Hochschulmarke (H1)
@@ -879,7 +879,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       ...prev,
       {
         type,
-        modelId: type === 'publicai' ? 'swiss-ai/apertus-70b-instruct' : 'openai/gpt-4o-mini',
+        modelId: type === 'publicai' ? 'swiss-ai/apertus-70b-instruct' : 'anthropic/claude-opus-4.6',
         temperature: 0,
         top_p: 1,
         max_tokens: 8192,
@@ -1102,7 +1102,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
 
   // Demoscope-Extraktionen werden hier zu virtuellen Run-Ergebnissen mit modelId = demoscope.modelName.
   // Damit landen sie automatisch in combinedResults und damit in Dashboard, Aggregat, Excel-Sheets,
-  // Erfolgsquoten-Karte etc. -- gleiche Auswertung wie Apertus / gpt-4o-mini.
+  // Erfolgsquoten-Karte etc. -- gleiche Auswertung wie Apertus / Claude Opus 4.6.
   // Echter Vision-Prompt-Text (ohne Bild-base64) landet so im Excel und in
   // Supabase -- damit ist der Run wissenschaftlich reproduzierbar.
   const visionPromptText = buildVisionPrompt(fragebogen);
@@ -1728,8 +1728,8 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                                     <SelectValue placeholder="Modell auswählen..." />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="openai/gpt-4o-mini">openai/gpt-4o-mini</SelectItem>
-                                    {model.modelId !== 'openai/gpt-4o-mini' && (
+                                    <SelectItem value="anthropic/claude-opus-4.6">anthropic/claude-opus-4.6</SelectItem>
+                                    {model.modelId !== 'anthropic/claude-opus-4.6' && (
                                       <SelectItem value={model.modelId}>{model.modelId}</SelectItem>
                                     )}
                                   </SelectContent>
@@ -1951,7 +1951,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                 <div>
                   <h2 className="text-3xl font-bold tracking-tight">Demoscope-Datensatz</h2>
                   <p className="text-muted-foreground max-w-3xl">
-                    Lade den <span className="font-mono">Profile/</span>-Ordner hoch. Das Persona-Profil (Rolle, Geschlecht, Alter, Haushalt …) kommt deterministisch aus dem Ordnernamen — Vision extrahiert nur noch die Fragebogen-Antworten. Jede Persona landet als virtuelles Modell <span className="font-mono">{demoscope.modelName}</span> in der Auswertung — gleiche Logik wie Apertus / gpt-4o-mini.
+                    Lade den <span className="font-mono">Profile/</span>-Ordner hoch. Das Persona-Profil (Rolle, Geschlecht, Alter, Haushalt …) kommt deterministisch aus dem Ordnernamen — Vision extrahiert nur noch die Fragebogen-Antworten. Jede Persona landet als virtuelles Modell <span className="font-mono">{demoscope.modelName}</span> in der Auswertung — gleiche Logik wie Apertus / Claude Opus 4.6.
                   </p>
                 </div>
               </div>
