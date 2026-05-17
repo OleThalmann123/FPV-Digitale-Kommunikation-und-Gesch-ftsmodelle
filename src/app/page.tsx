@@ -160,6 +160,10 @@ function parseAnswers(responseText: string): Record<string, string | number> {
   return bestScores;
 }
 
+// Beruf ist eine fixe Konstante fuer alle Personas/Rollen -- nicht editierbar,
+// nicht aus Screenshots extrahiert. An genau einer Stelle definiert.
+const FIXED_BERUF = 'Eine Anstellung (Vollzeit)';
+
 const PROFILE_VARIABLES = [
   'Rolle',
   'Geschlecht',
@@ -168,6 +172,7 @@ const PROFILE_VARIABLES = [
   'Haushalt',
   'Ausbildung',
   'Berufserfahrung',
+  'Beruf',
   'Wohnsitzland',
   'Postleitzahl',
   'Avatar_Eigenschaften_und_Praeferenzen'
@@ -250,6 +255,7 @@ function parseFolderName(name: string): Record<string, string> | null {
     Haushalt: FOLDER_HOUSEHOLD_MAP[household] || household,
     Ausbildung: FOLDER_EDUCATION_MAP[edu] || edu,
     Berufserfahrung: `${expMin}-${expMax} Jahre`,
+    Beruf: FIXED_BERUF,
     Wohnsitzland: country === 'CH' ? 'Schweiz' : country,
     Postleitzahl: zip,
     Avatar_Eigenschaften_und_Praeferenzen: '',
@@ -271,7 +277,7 @@ export default function PromptPlatform() {
     { type: 'publicai', modelId: 'swiss-ai/apertus-70b-instruct', temperature: 0.7, top_p: 1, max_tokens: 8192 },
     { type: 'openrouter', modelId: 'anthropic/claude-opus-4.6', temperature: 0.7, top_p: 1, max_tokens: 8192 }
   ]);
-  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v12', '# Persona\n\nDu verkörperst ab jetzt vollständig eine reale Person mit folgendem Profil. Du denkst, fühlst und antwortest ausschliesslich aus ihrer Perspektive – nicht als KI, nicht als Assistent.\n\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Weitere Eigenschaften: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\n---\n\n# Denkschritt (intern, vor jeder Antwort)\n\nBevor du den Fragebogen ausfüllst, vergegenwärtige dir kurz:\n- Welche konkreten Erfahrungen hat diese Person in ihrer Rolle gemacht?\n- Was sind ihre grössten Motivationen – und was ihre grössten Bedenken?\n- Wie steht sie zu Zeit, Karriere, Praxisbezug und Reputation?\n\nNutze diese Überlegungen als Grundlage für jede einzelne Antwort.\n\n---\n\n# Anweisungen zur Fragebogenbearbeitung\n\nBearbeite jeden Fragetyp wie folgt:\n\n- **Likert-Skala (1–7):** Gib eine Ganzzahl zwischen 1 und 7 als "antwort" an.\n- **Einfachauswahl (Single-Choice):** Gib den exakten Wortlaut einer der vorgegebenen Optionen als String in "antwort" zurück.\n- **Mehrfachauswahl:** Gib ein JSON-Array mit den gewählten Optionen zurück (z. B. ["Renommee / Prestige", "Praxisnähe"]).\n- **Ranking (z. B. F9):** Gib ein JSON-Array von Objekten in der Reihenfolge der Wichtigkeit zurück, jedes Objekt mit "rang" (1 = am wichtigsten) und "kategorie" (exakter Wortlaut). Es müssen ALLE 6 Kategorien gerankt werden.\n- **Aufmerksamkeitscheck (z. B. F7):** Gib exakt den geforderten Wert zurück.\n- **Offene Fragen (Q1, Q2, Q3):** Antworte als Freitext-String mit 1–3 Sätzen aus der Persona-Perspektive.\n\nZu jeder Antwort gibst du eine kurze Begründung aus der Perspektive der Persona.\n\n---\n\n# Ausgabeformat\n\nAntworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown, kein ```json-Block.\n\n{\n  "persona_reflexion": "2–3 Sätze: Wie denkt diese Person über das Thema? Was treibt sie an, was bremst sie?",\n  "bewertungen": [\n    { "frage": 1, "antwort": 5, "begruendung": "Kurze Begründung." },\n    { "frage": 3, "antwort": ["Renommee / Prestige", "Praxisnähe"], "begruendung": "..." },\n    { "frage": 9, "antwort": [ {"rang": 1, "kategorie": "AI-Tools (z. B. ChatGPT, Midjourney)"}, {"rang": 2, "kategorie": "Analytics & Data (z. B. GA4, Tableau)"}, {"rang": 3, "kategorie": "Marketing-Automation (z. B. HubSpot, Salesforce)"}, {"rang": 4, "kategorie": "Content & Social Media Tools"}, {"rang": 5, "kategorie": "SEO / Performance Marketing Tools"}, {"rang": 6, "kategorie": "Collaboration & Productivity Tools"} ], "begruendung": "..." },\n    { "frage": "Q1", "antwort": "Mir fehlen vor allem Themen wie ...", "begruendung": "..." }\n  ]\n}\n\n---\n\n# Fragebogen\n\n{{Fragebogen}}\n\n---\n\nDeine JSON-Antwort:');
+  const [metaPrompt, setMetaPrompt] = useLocalStorage('pp_metaPrompt_json_v13', '# Persona\n\nDu verkörperst ab jetzt vollständig eine reale Person mit folgendem Profil. Du denkst, fühlst und antwortest ausschliesslich aus ihrer Perspektive – nicht als KI, nicht als Assistent.\n\n- Rolle: {{Rolle}}\n- Geschlecht: {{Geschlecht}}\n- Alter: {{Alter}}\n- Nationalität: {{Nationalitaet}}\n- Haushalt: {{Haushalt}}\n- Ausbildung: {{Ausbildung}}\n- Berufserfahrung: {{Berufserfahrung}}\n- Beruf: {{Beruf}}\n- Wohnsitzland: {{Wohnsitzland}}\n- PLZ: {{Postleitzahl}}\n- Weitere Eigenschaften: {{Avatar_Eigenschaften_und_Praeferenzen}}\n\n---\n\n# Denkschritt (intern, vor jeder Antwort)\n\nBevor du den Fragebogen ausfüllst, vergegenwärtige dir kurz:\n- Welche konkreten Erfahrungen hat diese Person in ihrer Rolle gemacht?\n- Was sind ihre grössten Motivationen – und was ihre grössten Bedenken?\n- Wie steht sie zu Zeit, Karriere, Praxisbezug und Reputation?\n\nNutze diese Überlegungen als Grundlage für jede einzelne Antwort.\n\n---\n\n# Anweisungen zur Fragebogenbearbeitung\n\nBearbeite jeden Fragetyp wie folgt:\n\n- **Likert-Skala (1–7):** Gib eine Ganzzahl zwischen 1 und 7 als "antwort" an.\n- **Einfachauswahl (Single-Choice):** Gib den exakten Wortlaut einer der vorgegebenen Optionen als String in "antwort" zurück.\n- **Mehrfachauswahl:** Gib ein JSON-Array mit den gewählten Optionen zurück (z. B. ["Renommee / Prestige", "Praxisnähe"]).\n- **Ranking (z. B. F9):** Gib ein JSON-Array von Objekten in der Reihenfolge der Wichtigkeit zurück, jedes Objekt mit "rang" (1 = am wichtigsten) und "kategorie" (exakter Wortlaut). Es müssen ALLE 6 Kategorien gerankt werden.\n- **Aufmerksamkeitscheck (z. B. F7):** Gib exakt den geforderten Wert zurück.\n- **Offene Fragen (Q1, Q2, Q3):** Antworte als Freitext-String mit 1–3 Sätzen aus der Persona-Perspektive.\n\nZu jeder Antwort gibst du eine kurze Begründung aus der Perspektive der Persona.\n\n---\n\n# Ausgabeformat\n\nAntworte AUSSCHLIESSLICH in validem JSON. Keine Einleitung, kein Markdown, kein ```json-Block.\n\n{\n  "persona_reflexion": "2–3 Sätze: Wie denkt diese Person über das Thema? Was treibt sie an, was bremst sie?",\n  "bewertungen": [\n    { "frage": 1, "antwort": 5, "begruendung": "Kurze Begründung." },\n    { "frage": 3, "antwort": ["Renommee / Prestige", "Praxisnähe"], "begruendung": "..." },\n    { "frage": 9, "antwort": [ {"rang": 1, "kategorie": "AI-Tools (z. B. ChatGPT, Midjourney)"}, {"rang": 2, "kategorie": "Analytics & Data (z. B. GA4, Tableau)"}, {"rang": 3, "kategorie": "Marketing-Automation (z. B. HubSpot, Salesforce)"}, {"rang": 4, "kategorie": "Content & Social Media Tools"}, {"rang": 5, "kategorie": "SEO / Performance Marketing Tools"}, {"rang": 6, "kategorie": "Collaboration & Productivity Tools"} ], "begruendung": "..." },\n    { "frage": "Q1", "antwort": "Mir fehlen vor allem Themen wie ...", "begruendung": "..." }\n  ]\n}\n\n---\n\n# Fragebogen\n\n{{Fragebogen}}\n\n---\n\nDeine JSON-Antwort:');
   const [fragebogen, setFragebogen] = useLocalStorage('pp_fragebogen_v6', `SEKTION A - Reputation & Hochschulmarke (H1)
 F1. «Die Reputation einer Hochschule ist für mich ein entscheidender Faktor bei der Wahl eines CAS-Programms.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
 F2. «Ein CAS-Abschluss der HSG hätte für meine berufliche Positionierung einen höheren Wert als ein gleichwertiges Programm einer weniger renommierten Institution.» (1: Trifft überhaupt nicht zu - 7: Trifft vollständig zu)
@@ -373,6 +379,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       Haushalt: '1 Person kein Kind, 2 Personen 1 Kind',
       Ausbildung: 'Master',
       Berufserfahrung: roleWorkExperience[role] || '3-5 Jahre',
+      Beruf: FIXED_BERUF,
       Wohnsitzland: 'Schweiz',
       Postleitzahl: '9000',
       Avatar_Eigenschaften_und_Praeferenzen: roleEigenschaften[role] || ''
@@ -381,7 +388,7 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
   }, {} as Record<string, Record<string, string>>);
 
   const [activeRoles, setActiveRoles] = useLocalStorage<string[]>('pp_active_roles_v6', AVAILABLE_ROLES);
-  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v29', defaultRoleVars);
+  const [roleVariables, setRoleVariables] = useLocalStorage<Record<string, Record<string, string>>>('pp_role_vars_v30', defaultRoleVars);
 
   const variables = PROFILE_VARIABLES;
   const [results, setResults] = useState<{ id: string; promptSent: string; response: string; status: 'pending' | 'loading' | 'success' | 'error'; combo: Record<string, string>; modelId: string; modelConfig?: ModelConfig }[]>([]);
@@ -700,7 +707,9 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
       Rolle: extractedData.profil?.Rolle || 'Unbekannt',
     };
     variables.forEach(v => {
-      if (v !== 'Rolle') combo[v] = extractedData.profil?.[v] || '';
+      if (v === 'Rolle') return;
+      // Beruf ist fix fuer alle Personas -- nicht aus Screenshots extrahieren.
+      combo[v] = v === 'Beruf' ? FIXED_BERUF : (extractedData.profil?.[v] || '');
     });
     return { combo, response: raw };
   };
@@ -1672,7 +1681,10 @@ Weitere Kenntnisse: Project Management / Funnel Optimization / A/B Testing, Mark
                                 <TabsContent key={role} value={role} className="space-y-6 animate-in fade-in">
                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-6 bg-card">
                                     {variables.filter(v => v !== 'Rolle' && v !== 'Avatar_Eigenschaften_und_Praeferenzen').map(v => {
-                                      const isFixed = ['Alter', 'Haushalt', 'Berufserfahrung', 'Wohnsitzland', 'Postleitzahl', 'Nationalitaet'].includes(v);
+                                      // Nur Geschlecht & Haushalt sind weiss/editierbar -- alles
+                                      // andere (Alter, Nationalitaet, Ausbildung, Berufserfahrung,
+                                      // Beruf, Wohnsitzland, Postleitzahl) ist grau/gesperrt.
+                                      const isFixed = !['Geschlecht', 'Haushalt'].includes(v);
                                       return (
                                         <div key={v} className="space-y-3">
                                           <Label className="text-base font-semibold text-foreground/80">{v}</Label>
